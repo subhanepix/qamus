@@ -1,9 +1,11 @@
-const VERSION = 'qamus-v2';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-512.png',
+const VERSION = 'qamus-v3';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'manifest.webmanifest', 'icon-512.png',
   'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' bypasses the HTTP cache so a new VERSION never stores stale copies.
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k))))

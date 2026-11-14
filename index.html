@@ -28,11 +28,17 @@
     <button id="clear" class="icon-btn" aria-label="Clear" hidden>×</button>
     <ul id="suggest" class="suggest" role="listbox" hidden></ul>
     </div>
+    <button id="acct" class="acct" type="button" aria-label="Account" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+      <span class="acct-name"></span><span class="dot local"></span>
+    </button>
   </div>
 </header>
 <main id="main">
   <p id="status" class="muted">Loading dictionary…</p>
 </main>
+<script src="merge.js"></script>
+<script src="sync.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

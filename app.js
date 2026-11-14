@@ -17,6 +17,14 @@ let W = null, wForm = new Map(), laneIdx = new Map(), laneRoots = null, laneShar
 const $ = s => document.querySelector(s);
 const qEl = $('#q'), sug = $('#suggest'), main = $('#main');
 
+// ---------- sync config ----------
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+// The sync Worker's URL. Empty = local-only mode (no login UI). The localStorage key
+// `qamus.syncUrl` overrides it for local dev and tests (e.g. http://localhost:8787).
+const SYNC_URL = lsGet('qamus.syncUrl') ?? '';
+const Store = window.QamusStore, Sync = window.QamusSync;
+
 async function load() {
   const j = u => fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.json(); });
   IDX = await j('data/index.json');
@@ -430,6 +438,226 @@ function rootCard(rid, hits, hitForms, open) {
   return h + `</div></details>`;
 }
 
+// ---------- sheets (in-page dialogs; never alert/confirm/prompt) ----------
+let openSheet = null;
+function sheet({ title, body, onMount, onClose }) {
+  if (openSheet) openSheet.close();
+  const prev = document.activeElement;
+  const id = 'sheet-' + Math.random().toString(36).slice(2, 8);
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-backdrop';
+  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="${id}">
+    <div class="sheet-head"><h2 id="${id}">${title}</h2><button type="button" class="sheet-x" aria-label="Close">×</button></div>
+    <div class="sheet-body">${body}</div></div>`;
+  const panel = wrap.firstElementChild;
+  const focusables = () => [...panel.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter(el => !el.disabled && el.offsetParent !== null);
+  const onKey = e => {
+    if (e.key === 'Escape') { e.preventDefault(); api.close(); }
+    else if (e.key === 'Tab') {
+      const f = focusables(); if (!f.length) return;
+      const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+    }
+  };
+  const api = {
+    el: panel,
+    close() {
+      if (openSheet !== api) return;
+      openSheet = null;
+      document.removeEventListener('keydown', onKey, true);
+      wrap.remove();
+      document.body.classList.remove('sheet-open');
+      onClose?.();
+      if (prev && prev.isConnected) prev.focus({ preventScroll: true });
+    },
+  };
+  wrap.addEventListener('click', e => { if (e.target === wrap) api.close(); });
+  panel.querySelector('.sheet-x').addEventListener('click', () => api.close());
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(wrap);
+  document.body.classList.add('sheet-open');
+  openSheet = api;
+  onMount?.(panel, api);
+  const first = panel.querySelector('[autofocus]') || focusables().find(el => !el.classList.contains('sheet-x'));
+  first?.focus();
+  return api;
+}
+
+function relTime(t) {
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' min ago';
+  if (s < 86400) return Math.round(s / 3600) + ' h ago';
+  return new Date(t).toLocaleDateString();
+}
+
+// ---------- login + account ----------
+const acctEl = $('#acct');
+function randName() {
+  const a = new Uint8Array(8);
+  crypto.getRandomValues(a);
+  return 'qamus-' + [...a].map(b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+}
+const statusLabel = st => ({
+  synced: st.lastSync ? `Synced ${relTime(st.lastSync)}` : 'Synced',
+  syncing: 'Syncing…',
+  offline: 'Offline — changes are saved on this device and will sync when you reconnect.',
+  error: 'Sync problem: ' + (st.error || 'unknown error'),
+  local: 'Not syncing',
+}[st.status] || st.status);
+
+function renderAcct(st) {
+  if (!acctEl) return;
+  acctEl.querySelector('.dot').className = 'dot ' + (st.user ? st.status : 'local');
+  acctEl.querySelector('.acct-name').textContent = st.user || 'Sign in';
+  const label = st.user ? `Account ${st.user} · ${statusLabel(st)}` : 'Sign in to sync';
+  acctEl.setAttribute('aria-label', label);
+  acctEl.title = label;
+  acctEl.dataset.status = st.user ? st.status : 'local';
+}
+
+function loginSheet() {
+  sheet({
+    title: 'Choose a username to sync across devices',
+    body: `<p class="muted sheet-note">No password: the username is the key, so pick something hard to guess and use the same one on your other devices.</p>
+      <label class="lbl" for="lg-name">Username</label>
+      <div class="field-row">
+        <input id="lg-name" class="inp" value="${randName()}" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" enterkeyhint="go" autofocus>
+        <button type="button" class="btn" id="lg-regen" aria-label="Suggest another username" title="Suggest another">↻</button>
+      </div>
+      <p class="form-msg" id="lg-msg" role="status" aria-live="polite"></p>
+      <div class="actions" id="lg-actions"></div>`,
+    onMount(p, api) {
+      const inp = p.querySelector('#lg-name'), msg = p.querySelector('#lg-msg'), acts = p.querySelector('#lg-actions');
+      let checked = null, busy = false;
+      const say = (html, err) => { msg.innerHTML = html; msg.classList.toggle('err', !!err); };
+      const buttons = list => {
+        acts.innerHTML = list.map(([id, label, cls]) => `<button type="button" class="btn ${cls || ''}" id="${id}">${label}</button>`).join('');
+      };
+      const idle = () => {
+        checked = null;
+        buttons([['lg-go', 'Continue', 'primary'], ['lg-skip', 'Use without syncing', 'quiet']]);
+      };
+      const confirmState = (name, kind) => {
+        checked = name;
+        say(kind === 'existing'
+          ? `Welcome back — data on this device will be merged into <b>${esc(name)}</b>.`
+          : `New account — nothing is saved under <b>${esc(name)}</b> yet.`);
+        p.dataset.check = kind;
+        buttons([['lg-confirm', kind === 'existing' ? 'Sign in' : 'Create account', 'primary'], ['lg-change', 'Change name', 'quiet']]);
+        p.querySelector('#lg-confirm').focus();
+      };
+      const go = async () => {
+        if (busy) return;
+        const name = QamusMerge.normUsername(inp.value);
+        if (!name) { say('Use 3–32 characters: letters a–z, digits, “-” or “_”.', true); inp.focus(); return; }
+        inp.value = name;
+        busy = true; say('Checking…');
+        acts.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        const kind = await Sync.check(name);
+        busy = false;
+        if (kind === 'existing' || kind === 'new') return confirmState(name, kind);
+        idle();
+        if (kind === 'invalid') say('Use 3–32 characters: letters a–z, digits, “-” or “_”.', true);
+        else { say('Can’t reach the sync server. Check your connection and try again.', true); p.querySelector('#lg-go').textContent = 'Retry'; }
+      };
+      acts.addEventListener('click', e => {
+        const id = e.target.closest('button')?.id;
+        if (id === 'lg-go') go();
+        else if (id === 'lg-skip') { lsSet('qamus.syncSkipped', '1'); api.close(); }
+        else if (id === 'lg-change') { idle(); say(''); delete p.dataset.check; inp.focus(); inp.select(); }
+        else if (id === 'lg-confirm' && checked) { Sync.signIn(checked); api.close(); }
+      });
+      inp.addEventListener('input', () => { if (checked) { idle(); say(''); delete p.dataset.check; } });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checked ? p.querySelector('#lg-confirm')?.click() : go(); } });
+      p.querySelector('#lg-regen').addEventListener('click', () => { inp.value = randName(); inp.dispatchEvent(new Event('input')); inp.focus(); });
+      idle();
+      inp.select();
+    },
+  });
+}
+
+function accountSheet() {
+  const st = Sync.state;
+  if (!st.user) return loginSheet();
+  let off = null;
+  sheet({
+    title: 'Account',
+    body: `<p class="acct-user"><span class="muted">Signed in as</span> <b>${esc(st.user)}</b></p>
+      <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
+      <div class="actions" id="ac-main">
+        <button type="button" class="btn primary" id="ac-sync">Sync now</button>
+        <button type="button" class="btn quiet" id="ac-out">Sign out</button>
+      </div>
+      <div class="confirm" id="ac-confirm" hidden>
+        <p id="ac-q"></p>
+        <div class="actions col">
+          <button type="button" class="btn danger" id="ac-clear">Sign out and remove data from this device</button>
+          <button type="button" class="btn" id="ac-keep">Sign out, keep data here</button>
+          <button type="button" class="btn quiet" id="ac-cancel">Cancel</button>
+        </div>
+      </div>`,
+    onMount(p, api) {
+      const stEl = p.querySelector('#ac-status'), conf = p.querySelector('#ac-confirm'), q = p.querySelector('#ac-q');
+      const show = s => {
+        stEl.textContent = statusLabel(s) + (s.dirty && s.status !== 'syncing' ? ' · Unsynced changes on this device.' : '');
+        stEl.classList.toggle('err', s.status === 'error');
+        p.querySelector('#ac-sync').disabled = s.status === 'syncing';
+      };
+      show(st);
+      off = Sync.on('status', show);
+      const ask = (text, clearLabel) => {
+        q.innerHTML = text;
+        p.querySelector('#ac-clear').textContent = clearLabel;
+        conf.hidden = false;
+        p.querySelector('#ac-main').hidden = true;
+        p.querySelector('#ac-cancel').focus();
+      };
+      let force = false;
+      const out = async keepData => {
+        conf.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        q.textContent = 'Signing out…';
+        const r = await Sync.signOut({ keepData, force });
+        conf.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        if (!r.done) {
+          force = true;
+          return ask('<b>Your latest changes couldn’t be synced.</b> Removing the data now will lose them. Keep it on this device instead, or remove it anyway?', 'Remove anyway');
+        }
+        api.close();
+        route();
+      };
+      p.addEventListener('click', e => {
+        const id = e.target.closest('button')?.id;
+        if (id === 'ac-sync') Sync.syncNow();
+        else if (id === 'ac-out') {
+          const s = Sync.state;
+          ask((s.dirty ? '<b>Some changes on this device haven’t synced yet</b>; they’ll be sent first. ' : '') +
+            'Remove your words and history from this device? They stay in your account.', 'Sign out and remove data from this device');
+        }
+        else if (id === 'ac-cancel') { conf.hidden = true; force = false; p.querySelector('#ac-main').hidden = false; p.querySelector('#ac-out').focus(); }
+        else if (id === 'ac-clear') out(false);
+        else if (id === 'ac-keep') out(true);
+      });
+    },
+    onClose() { off?.(); },
+  });
+}
+
+function initSync() {
+  if (!Store || !Sync) return;   // sync.js not loaded (e.g. a single-file preview build)
+  Store.init().then(() => {
+    if (!SYNC_URL) return;
+    Sync.on('status', renderAcct);
+    Sync.init({ url: SYNC_URL });
+    renderAcct(Sync.state);
+    acctEl.hidden = false;
+    acctEl.addEventListener('click', accountSheet);
+    if (!Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet();
+  });
+}
+
 // ---------- events ----------
 let t;
 qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderSuggest, 60); });
@@ -460,3 +688,4 @@ main.addEventListener('toggle', e => { if (e.target.matches?.('details.lane') &&
 document.getElementById('back')?.addEventListener('click', back);
 if (!MEM && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 load().catch(err => { main.innerHTML = `<p>Couldn’t load the dictionary data (${esc(String(err.message || err))}).</p>`; });
+initSync();

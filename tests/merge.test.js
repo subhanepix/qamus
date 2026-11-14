@@ -212,3 +212,18 @@ test('normUsername', () => {
   assert.equal(M.normUsername('ünï'), null);
   assert.equal(M.normUsername(42), null);
 });
+
+test('sameContent ignores top-level updatedAt and key order', () => {
+  const a = doc({ updatedAt: 1, cards: [card('c1', 5)], reviews: { c1: { due: 1, updatedAt: 2 } } });
+  const b = JSON.parse(JSON.stringify(a));
+  b.updatedAt = 999;
+  b.reviews = { c1: { updatedAt: 2, due: 1 } };
+  assert.equal(M.sameContent(a, b), true);
+  b.cards[0].gloss = 'x';
+  assert.equal(M.sameContent(a, b), false);
+  assert.equal(M.sameContent(null, M.emptyDoc()), true);
+  // merge(local, response) where response already contains local → same content
+  const resp = M.merge(a, doc({ cards: [card('c2', 3)] }), NOW);
+  assert.equal(M.sameContent(M.merge(a, resp, NOW), resp), true);
+  assert.equal(M.sameContent(a, resp), false);
+});

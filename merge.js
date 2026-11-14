@@ -201,7 +201,19 @@
     return null;
   }
 
-  const api = { emptyDoc, merge, validateDoc, checkLimits, normUsername, LIMITS, TOMBSTONE_MS };
+  // Stable JSON (sorted object keys) for content comparison.
+  function stable(x) {
+    if (Array.isArray(x)) return '[' + x.map(stable).join(',') + ']';
+    if (x && typeof x === 'object') return '{' + Object.keys(x).sort().map(k => JSON.stringify(k) + ':' + stable(x[k])).join(',') + '}';
+    return JSON.stringify(x === undefined ? null : x);
+  }
+  // True when two docs hold the same data, ignoring the top-level updatedAt stamp and key order.
+  function sameContent(a, b) {
+    const strip = d => { const { updatedAt, ...rest } = d || emptyDoc(); return rest; };
+    return stable(strip(a)) === stable(strip(b));
+  }
+
+  const api = { emptyDoc, merge, validateDoc, checkLimits, normUsername, sameContent, LIMITS, TOMBSTONE_MS };
   root.QamusMerge = api;
   if (typeof module === 'object' && module && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : typeof self !== 'undefined' ? self : this);
