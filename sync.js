@@ -64,9 +64,12 @@
           if (typeof indexedDB === 'undefined') throw new Error('no indexedDB');
           db = await openDB();
           const [d, m] = await Promise.all([idbGet('doc'), idbGet('meta')]);
-          if (d && QM.validateDoc(d).ok) doc = d;
-          else if (d) console.warn('Qamus: stored document failed validation; starting fresh');
-          if (m && typeof m === 'object') meta = { dirty: !!m.dirty, gen: m.gen | 0, lastSync: +m.lastSync || 0 };
+          const early = meta.gen > 0;   // mutate() ran before the stored doc finished loading
+          const stored = d && QM.validateDoc(d).ok ? d : null;
+          if (d && !stored) console.warn('Qamus: stored document failed validation; starting fresh');
+          if (m && typeof m === 'object') meta = { dirty: !!m.dirty, gen: (m.gen | 0) + meta.gen, lastSync: +m.lastSync || 0 };
+          doc = early ? QM.merge(stored, doc) : (stored || doc);   // keep early changes
+          if (early) { meta.dirty = true; persist(); }
           Store.persistent = true;
         } catch (e) {
           db = null;

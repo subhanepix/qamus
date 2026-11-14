@@ -152,8 +152,8 @@ function pick(r) {
 // In the Claude preview the hash can't carry state, so keep a small in-page history instead.
 const MEM = !!window.QAMUS_MEMORY_ROUTER;
 let memStack = [], memCur = '';
-function go(params) {
-  const h = new URLSearchParams(params).toString();
+function go(params) {   // params: object of hash params, or a bare route name like 'history'
+  const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
   if (MEM) { if (memCur && memCur !== h) memStack.push(memCur); memCur = h; return route(); }
   if (location.hash === '#' + h) route(); else location.hash = '#' + h;
 }
@@ -165,29 +165,31 @@ function route() {
   const q = p.get('q') || '';
   if (q && qEl.value !== q && document.activeElement !== qEl) qEl.value = q;
   $('#clear').hidden = !qEl.value;
-  if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) main.innerHTML = '<p class="muted">Loading dictionary…</p>'; else home(); return; }
-  if (p.get('e')) return showEntry(+p.get('e'));
-  if (p.get('f')) { const f = HW.forms[+p.get('f')]; return showRoots([f[0]], { forms: [f] }, q); }
-  if (p.get('w')) { if (!W) { main.innerHTML = '<p class="muted">Loading Wiktionary…</p>'; return; } const k = +p.get('w'); return showRoots(wRoots(k), { wikt: [k] }, q); }
-  if (q) return search(q);
-  home();
+  if (!p.has('history')) histConfirm = false;
+  if (p.has('history') && Store) return historyView();
+  if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) { view = 'loading'; main.innerHTML = '<p class="muted">Loading dictionary…</p>'; } else home(); return; }
+  view = 'result';
+  if (p.get('e')) showEntry(+p.get('e'));
+  else if (p.get('f')) { const f = HW.forms[+p.get('f')]; showRoots([f[0]], { forms: [f] }, q); }
+  else if (p.get('w')) { if (!W) { view = 'loading'; main.innerHTML = '<p class="muted">Loading Wiktionary…</p>'; return; } const k = +p.get('w'); showRoots(wRoots(k), { wikt: [k] }, q); }
+  else if (q.trim()) search(q);
+  else return home();
+  if (q) recordSearch(q);   // a result view is on screen: record it (never on keystrokes)
 }
 
 // ---------- views ----------
+const qAttr = q => isAr(q) ? 'lang="ar"' : 'dir="auto"';
 function home() {
-  const h = history_();
+  view = 'home';
+  const h = liveHistory().slice(0, HIST_HOME);
   main.innerHTML = `<div class="empty muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
     <p style="font-size:14px">Hamzas, harakat, ة/ه and ى/ي don’t matter. Prefixes and suffixes are stripped automatically.</p></div>
-    ${h.length ? `<h2 class="sec">Recent</h2><div class="history">${h.map(w => `<button lang="ar" data-q="${esc(w)}">${esc(w)}</button>`).join('')}</div>` : ''}`;
-}
-function history_() { try { return JSON.parse(localStorage.getItem('hist') || '[]'); } catch { return []; } }
-function remember(w) {
-  try { const h = history_().filter(x => x !== w); h.unshift(w); localStorage.setItem('hist', JSON.stringify(h.slice(0, 30))); } catch {}
+    ${h.length ? `<div class="sec-row"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
+    <div class="history">${h.map(({ q }) => `<button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>` : ''}`;
 }
 
 function search(q) {
   q = q.trim(); if (!q) return home();
-  remember(q);
   if (!isAr(q)) return englishSearch(q);
 
   // root syntax: letters separated by spaces/hyphens/dots, e.g. ك ت ب
@@ -438,6 +440,148 @@ function rootCard(rid, hits, hitForms, open) {
   return h + `</div></details>`;
 }
 
+// ---------- search history (synced: Store.doc.history) ----------
+const HIST_HOME = 12, HIST_MAX = 500;
+let view = '';              // 'home' | 'history' | 'result' | 'loading' — what #main shows
+let histConfirm = false;    // "Clear history" inline confirm is open
+const cleanQ = s => String(s).trim().replace(/\s+/g, ' ').slice(0, 200);
+function legacyHist() {     // the pre-sync localStorage list (newest first)
+  try { const h = JSON.parse(localStorage.getItem('hist') || '[]'); return Array.isArray(h) ? h.filter(x => typeof x === 'string') : []; }
+  catch { return []; }
+}
+function liveHistory() {
+  if (!Store) return legacyHist().map(q => ({ q, t: 0 }));
+  return Store.doc.history.filter(h => !h.deleted).sort((a, b) => b.t - a.t);
+}
+const historyPaused = () => !!Store?.doc.settings.pauseHistory;
+const maxT = (hist, q) => hist.reduce((m, h) => (h.q === q && h.t > m ? h.t : m), 0);
+
+function recordSearch(raw) {
+  const q = cleanQ(raw);
+  if (!q) return;
+  if (!Store) {   // no store (single-file preview): keep the old local list working
+    try { const h = legacyHist().filter(x => x !== q); h.unshift(q); localStorage.setItem('hist', JSON.stringify(h.slice(0, 30))); } catch {}
+    return;
+  }
+  Store.init().then(() => {
+    if (historyPaused()) return;
+    if (liveHistory()[0]?.q === q) return;   // consecutive repeat (and route() re-renders)
+    Store.mutate(d => {
+      const t = Math.max(Date.now(), (d.settings.historyClearedAt || 0) + 1, maxT(d.history, q) + 1);
+      d.history = [{ q, t }, ...d.history.filter(h => h.q !== q)];
+      let live = 0;
+      d.history = d.history.filter(h => h.deleted || ++live <= HIST_MAX);
+    });
+  });
+}
+function deleteSearch(q) {
+  Store.mutate(d => {
+    const t = Math.max(Date.now(), maxT(d.history, q) + 1);
+    d.history = [...d.history.filter(h => h.q !== q), { q, t, deleted: true }];
+  });
+}
+function clearHistory() {
+  Store.mutate(d => {
+    const now = Math.max(Date.now(), ...d.history.map(h => h.t + 1));
+    d.history = [];
+    d.settings = { ...d.settings, historyClearedAt: now, updatedAt: now };
+  });
+}
+function setPauseHistory(on) {
+  Store.mutate(d => { d.settings = { ...d.settings, pauseHistory: !!on, updatedAt: Date.now() }; });
+}
+// One-time move of the old localStorage list into the synced document.
+function migrateHist() {
+  let raw = null;
+  try { raw = localStorage.getItem('hist'); } catch { return; }
+  if (raw === null) return;
+  const have = new Set(Store.doc.history.map(h => h.q));
+  const add = [...new Set(legacyHist().map(cleanQ))].filter(q => q && !have.has(q));
+  if (add.length) {
+    const now = Date.now();
+    Store.mutate(d => { d.history = [...d.history, ...add.map((q, i) => ({ q, t: now - (i + 1) * 1000 }))]; });
+  }
+  if (Store.persistent) { try { localStorage.removeItem('hist'); } catch {} }
+}
+
+function historyView() {
+  view = 'history';
+  main.dataset.empty = '';
+  const items = liveHistory(), paused = historyPaused(), n = items.length;
+  if (!n) histConfirm = false;
+  main.innerHTML = `<h2 class="sec">History${n ? ` · ${n} search${n === 1 ? '' : 'es'}` : ''}</h2>
+    <div class="hist-controls">
+      <label class="switch"><input type="checkbox" id="hist-pause" ${paused ? 'checked' : ''}><span class="track" aria-hidden="true"></span>Pause recording</label>
+      ${n ? `<button type="button" class="btn" id="hist-clear" ${histConfirm ? 'hidden' : ''}>Clear history</button>` : ''}
+    </div>
+    ${histConfirm ? `<div class="confirm" id="hist-confirm"><p>Clear all ${n} search${n === 1 ? '' : 'es'} on all your devices?</p>
+      <div class="actions"><button type="button" class="btn danger" id="hist-clear-yes">Clear</button><button type="button" class="btn quiet" id="hist-clear-no">Cancel</button></div></div>` : ''}
+    ${paused ? '<p class="muted hist-note">Recording is paused. New searches won’t be saved.</p>' : ''}
+    ${n ? `<ul class="hist-list">${items.map(h => `<li class="hist-row" data-hq="${esc(h.q)}">
+      <button type="button" class="hist-q" data-q="${esc(h.q)}"><span class="w" ${qAttr(h.q)}>${esc(h.q)}</span><span class="hist-time">${relTime(h.t)}</span></button>
+      <button type="button" class="hist-del" aria-label="Delete ${esc(h.q)}" title="Delete">×</button></li>`).join('')}</ul>`
+      : '<p class="muted">No searches yet.</p>'}`;
+  window.scrollTo(0, 0);
+}
+const rowSel = q => `.hist-row[data-hq="${CSS.escape(q)}"]`;
+function deleteRow(row, { refocus } = {}) {
+  const q = row.dataset.hq;
+  const next = row.nextElementSibling?.dataset.hq ?? row.previousElementSibling?.dataset.hq;
+  deleteSearch(q);   // re-renders synchronously via Store 'change'
+  if (refocus) (next != null ? main.querySelector(rowSel(next) + ' .hist-del') : main.querySelector('#hist-pause'))?.focus();
+}
+
+// Registered before the generic #main click handler, so these win.
+main.addEventListener('click', e => {
+  const t = e.target;
+  const goEl = t.closest('[data-go]');
+  if (goEl) { e.stopImmediatePropagation(); go(goEl.dataset.go); return; }
+  const del = t.closest('.hist-del');
+  if (del) { e.stopImmediatePropagation(); deleteRow(del.closest('.hist-row'), { refocus: e.detail === 0 || document.activeElement === del }); return; }
+  const id = t.closest('button')?.id;
+  if (id === 'hist-clear') { e.stopImmediatePropagation(); histConfirm = true; historyView(); $('#hist-clear-no')?.focus(); }
+  else if (id === 'hist-clear-no') { e.stopImmediatePropagation(); histConfirm = false; historyView(); $('#hist-clear')?.focus(); }
+  else if (id === 'hist-clear-yes') { e.stopImmediatePropagation(); histConfirm = false; clearHistory(); $('#hist-pause')?.focus(); }
+});
+main.addEventListener('change', e => { if (e.target.id === 'hist-pause') { setPauseHistory(e.target.checked); $('#hist-pause')?.focus(); } });
+
+// Swipe a history row left to delete it (pointer events: touch, pen and mouse).
+let swipe = null, swallowClick = false;
+main.addEventListener('pointerdown', e => {
+  const row = e.target.closest('.hist-row');
+  if (!row || e.button !== 0 || e.target.closest('.hist-del')) return;
+  swipe = { row, id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, active: false };
+});
+main.addEventListener('pointermove', e => {
+  if (!swipe || e.pointerId !== swipe.id) return;
+  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
+  if (!swipe.active) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { swipe = null; return; }
+    if (dx > -10) return;
+    swipe.active = true;
+    swipe.row.classList.add('swiping');
+    try { swipe.row.setPointerCapture(e.pointerId); } catch {}
+  }
+  swipe.dx = Math.min(0, dx);
+  swipe.row.style.transform = `translateX(${swipe.dx}px)`;
+});
+function endSwipe(e) {
+  if (!swipe || e.pointerId !== swipe.id) return;
+  const s = swipe; swipe = null;
+  if (!s.active) return;
+  swallowClick = true; setTimeout(() => { swallowClick = false; }, 300);
+  s.row.classList.remove('swiping');
+  if (s.dx < -80 && e.type === 'pointerup') {
+    s.row.classList.add('gone');
+    s.row.style.transform = 'translateX(-110%)';
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => { if (s.row.isConnected) deleteRow(s.row); }, reduce ? 0 : 160);
+  } else s.row.style.transform = '';
+}
+main.addEventListener('pointerup', endSwipe);
+main.addEventListener('pointercancel', endSwipe);
+main.addEventListener('click', e => { if (swallowClick) { swallowClick = false; e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+
 // ---------- sheets (in-page dialogs; never alert/confirm/prompt) ----------
 let openSheet = null;
 function sheet({ title, body, onMount, onClose }) {
@@ -589,6 +733,7 @@ function accountSheet() {
       <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
       <div class="actions" id="ac-main">
         <button type="button" class="btn primary" id="ac-sync">Sync now</button>
+        <button type="button" class="btn" id="ac-hist">Search history</button>
         <button type="button" class="btn quiet" id="ac-out">Sign out</button>
       </div>
       <div class="confirm" id="ac-confirm" hidden>
@@ -631,6 +776,7 @@ function accountSheet() {
       p.addEventListener('click', e => {
         const id = e.target.closest('button')?.id;
         if (id === 'ac-sync') Sync.syncNow();
+        else if (id === 'ac-hist') { api.close(); go('history'); }
         else if (id === 'ac-out') {
           const s = Sync.state;
           ask((s.dirty ? '<b>Some changes on this device haven’t synced yet</b>; they’ll be sent first. ' : '') +
@@ -648,6 +794,9 @@ function accountSheet() {
 function initSync() {
   if (!Store || !Sync) return;   // sync.js not loaded (e.g. a single-file preview build)
   Store.init().then(() => {
+    migrateHist();
+    Store.on('change', () => { if (view === 'home') home(); else if (view === 'history') historyView(); });
+    if (view === 'home') home(); else if (view === 'history') historyView();
     if (!SYNC_URL) return;
     Sync.on('status', renderAcct);
     Sync.init({ url: SYNC_URL });

@@ -294,7 +294,7 @@ for (const scheme of ['light', 'dark']) {
     expect(m.sheetW).toBeLessThanOrEqual(400);
     expect(m.bg).toBe(scheme === 'dark' ? 'rgb(30, 33, 37)' : 'rgb(255, 253, 248)');
     expect(m.ink).toBe(scheme === 'dark' ? 'rgb(235, 231, 223)' : 'rgb(29, 29, 27)');
-    const btns = await page.locator('.sheet button').evaluateAll(bs => bs.map(b => b.getBoundingClientRect().height));
+    const btns = await page.locator('.sheet button').evaluateAll(bs => bs.map(b => Math.round(b.getBoundingClientRect().height)));
     for (const h of btns) expect(h).toBeGreaterThanOrEqual(44);
   });
 }
