@@ -227,3 +227,15 @@ test('sameContent ignores top-level updatedAt and key order', () => {
   assert.equal(M.sameContent(M.merge(a, resp, NOW), resp), true);
   assert.equal(M.sameContent(a, resp), false);
 });
+
+test('reviews may carry a browse mark; merge keeps the newer record', () => {
+  const d = JSON.parse(JSON.stringify(SPEC_DOC));
+  d.reviews.c_x = { mark: 2, updatedAt: 5 };
+  assert.equal(M.validateDoc(d).ok, true);
+  d.reviews.c_x.mark = 'again';
+  assert.match(M.validateDoc(d).error, /bad "mark"/);
+  const cards = [card('c1', 1)];
+  const a = doc({ cards, reviews: { c1: { mark: 1, updatedAt: 10 } } });
+  const b = doc({ cards, reviews: { c1: { due: 5, interval: 1, ease: 2.5, reps: 1, lapses: 0, last: 4, mark: 1, updatedAt: 20 } } });
+  assert.deepEqual(M.merge(a, b, NOW).reviews.c1, b.reviews.c1);
+});

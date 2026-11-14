@@ -93,11 +93,14 @@ const cardsIn = id => liveCards().filter(c => cardFolder(c) === id);
 function cardsDeep(id) { const ids = new Set([id, ...descendants(id)]); return liveCards().filter(c => ids.has(cardFolder(c))); }
 
 // Review status — step 5 (SRS) writes `reviews`; a card with no review yet is "new".
+// Due dates sit on local midnight, so "due" means due by the end of today.
+const dayStart = (t, add = 0) => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + add); return d.getTime(); };
+const endOfDay = (t, add = 0) => dayStart(t, add + 1) - 1;
 function cardStatus(card, now = Date.now()) {
   const r = vdoc().reviews[card.id];
-  if (!r || !r.last) return { k: 'new', label: 'New' };   // never reviewed
-  if (r.due <= now) return { k: 'due', label: 'Due' };
-  const d = Math.max(1, Math.ceil((r.due - now) / 86400000));
+  if (!r || !r.last) return { k: 'new', label: 'New' };   // never reviewed (a browse mark alone doesn't count)
+  if (r.due <= endOfDay(now)) return { k: 'due', label: 'Due' };
+  const d = Math.max(1, Math.round((dayStart(r.due) - dayStart(now)) / 86400000));
   return { k: 'later', label: `in ${d}d` };
 }
 const dueCount = cards => cards.filter(c => cardStatus(c).k !== 'later').length;
@@ -535,21 +538,35 @@ function vocabLink() {
   return `<button type="button" class="vocab-link" data-go="vocab"><span class="vl-title">Vocab</span>
     <span class="vl-meta">${cards.length ? `${plural(cards.length, 'word')}${due ? ` · ${due} to study` : ''}` : 'Save words with the bookmark'}</span><span aria-hidden="true">›</span></button>`;
 }
-function folderRowHtml(f, depth = 0) {
-  const cards = cardsDeep(f.id), due = dueCount(cards);
-  return `<li class="folder-row" style="--depth:${depth}">
-    <button type="button" class="fr-open" data-go="folder=${esc(f.id)}"><span class="fr-name" dir="auto">${esc(f.name)}</span>
-      <span class="fr-meta">${plural(cards.length, 'card')}${due ? ` · <b>${due} due</b>` : ''}</span></button>
-    <button type="button" class="fr-more" data-folder-actions="${esc(f.id)}" aria-label="Folder actions: ${esc(f.name)}">⋯</button></li>`;
+function folderRowHtml(f, depth = 0, selectable = false) {
+  const cards = cardsDeep(f.id), due = dueCount(cards), picked = selectable && vsel.picked.has(f.id);
+  const meta = `<span class="fr-meta">${plural(cards.length, 'card')}${due ? ` · <b>${due} due</b>` : ''}</span>`;
+  return `<li class="folder-row ${picked ? 'picked' : ''}" style="--depth:${depth}">
+    ${selectable ? `<label class="pick"><input type="checkbox" data-pick-folder="${esc(f.id)}" ${picked ? 'checked' : ''} aria-label="Select ${esc(f.name)}"></label>
+      <button type="button" class="fr-open" data-toggle-folder="${esc(f.id)}"><span class="fr-name" dir="auto">${esc(f.name)}</span>${meta}</button>`
+    : `<button type="button" class="fr-open" data-go="folder=${esc(f.id)}"><span class="fr-name" dir="auto">${esc(f.name)}</span>${meta}</button>
+      <button type="button" class="fr-more" data-folder-actions="${esc(f.id)}" aria-label="Folder actions: ${esc(f.name)}">⋯</button>`}</li>`;
 }
+let vsel = { on: false, picked: new Set() };   // Vocab view: pick folders to study together
+const studyHash = (ids, mode) => `study=${ids.map(encodeURIComponent).join(',')}&mode=${mode}`;
 
 function vocabView() {
   main.dataset.empty = '';
   const rows = tree(), total = liveCards().length;
+  const live = new Set(rows.map(r => r.f.id));
+  vsel.picked = new Set([...vsel.picked].filter(id => live.has(id)));
+  if (!rows.length) vsel.on = false;
+  const n = vsel.picked.size;
   renderKeepingFocus('vocab', `<h2 class="sec">Vocab · ${plural(total, 'card')}</h2>
     <div class="v-actions"><button type="button" class="btn" id="v-newfolder">New folder</button>
-      ${total ? '<button type="button" class="btn" id="v-export-all">Export all</button>' : ''}</div>
-    ${rows.length ? `<ul class="folder-list">${rows.map(({ f, depth }) => folderRowHtml(f, depth)).join('')}</ul>`
+      ${total ? '<button type="button" class="btn" id="v-export-all">Export all</button>' : ''}
+      ${rows.length ? `<button type="button" class="btn ${vsel.on ? 'primary' : ''}" id="v-select" aria-pressed="${vsel.on}">Select to study</button>` : ''}</div>
+    ${rows.length ? `<ul class="folder-list">${rows.map(({ f, depth }) => folderRowHtml(f, depth, vsel.on)).join('')}</ul>` : ''}
+    ${vsel.on ? `<div class="select-bar" role="toolbar" aria-label="Study selection"><span class="sb-n" aria-live="polite">${plural(n, 'folder')} selected</span>
+      <button type="button" class="btn" id="vs-study" ${n ? '' : 'disabled'}>Study</button>
+      <button type="button" class="btn" id="vs-review" ${n ? '' : 'disabled'}>Review</button>
+      <button type="button" class="btn primary" id="vs-fdone">Done</button></div>` : ''}
+    ${rows.length ? ''
       : `<p class="muted">No saved words yet. Tap the bookmark <span class="inline-bm">${BOOKMARK}</span> next to any word in the dictionary to save it, or create a folder and add cards by hand.</p>`}`);
 }
 
@@ -610,6 +627,8 @@ function folderView(id) {
       <span class="muted">${plural(cards.length, 'card')}</span>
       <button type="button" class="fr-more" data-folder-actions="${esc(id)}" aria-label="Folder actions: ${esc(f.name)}">⋯</button></div>
     <div class="v-actions">
+      ${cardsDeep(id).length ? `<button type="button" class="btn" id="vf-study">Study</button>
+      <button type="button" class="btn ${dueCount(cardsDeep(id)) ? 'primary' : ''}" id="vf-review">Review · ${dueCount(cardsDeep(id))} due</button>` : ''}
       <button type="button" class="btn" id="vf-add">Add card</button>
       <button type="button" class="btn" id="vf-import">Import</button>
       ${cards.length ? `<button type="button" class="btn" id="vf-export">Export</button>
@@ -828,6 +847,13 @@ main.addEventListener('click', e => {
     vf.confirmDel = false;
     folderView(vf.folder);
   };
+  const tf = t.closest('[data-toggle-folder]');
+  if (tf) {
+    const fid = tf.dataset.toggleFolder;
+    vsel.picked.has(fid) ? vsel.picked.delete(fid) : vsel.picked.add(fid);
+    vocabView();
+    return;
+  }
   const openEl = t.closest('[data-open-card], [data-edit-card]');
   if (openEl) {
     const id = openEl.dataset.openCard || openEl.dataset.editCard;
@@ -840,6 +866,11 @@ main.addEventListener('click', e => {
   const shown = () => cardsIn(vf.folder).filter(c => matches(c, vf.filter.trim())).map(c => c.id);
   switch (id) {
     case 'v-newfolder': return newFolderSheet(null);
+    case 'v-select': vsel = { on: !vsel.on, picked: new Set() }; vocabView(); return $(vsel.on ? '#vs-fdone' : '#v-select')?.focus();
+    case 'vs-fdone': vsel = { on: false, picked: new Set() }; vocabView(); return $('#v-select')?.focus();
+    case 'vs-study': case 'vs-review': { const ids = [...vsel.picked]; vsel = { on: false, picked: new Set() }; return go(studyHash(ids, id === 'vs-study' ? 'browse' : 'review')); }
+    case 'vf-study': return go(studyHash([vf.folder], 'browse'));
+    case 'vf-review': return go(studyHash([vf.folder], 'review'));
     case 'v-export-all': return exportSheet(null);
     case 'vf-add': return cardSheet({ mode: 'add', folder: vf.folder });
     case 'vf-import': return pickImportFile(vf.folder);
@@ -854,6 +885,13 @@ main.addEventListener('click', e => {
   }
 });
 main.addEventListener('change', e => {
+  if (e.target.matches?.('[data-pick-folder]')) {
+    const id = e.target.dataset.pickFolder;
+    e.target.checked ? vsel.picked.add(id) : vsel.picked.delete(id);
+    vocabView();
+    main.querySelector(`[data-pick-folder="${CSS.escape(id)}"]`)?.focus();
+    return;
+  }
   if (e.target.matches?.('[data-pick-card]')) {
     const id = e.target.dataset.pickCard;
     e.target.checked ? vf.picked.add(id) : vf.picked.delete(id);

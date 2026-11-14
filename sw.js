@@ -1,5 +1,5 @@
-const VERSION = 'qamus-v5';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'vocab.js', 'manifest.webmanifest', 'icon-512.png',
+const VERSION = 'qamus-v6';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'vocab.js', 'study.js', 'manifest.webmanifest', 'icon-512.png',
   'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json'];
 
 self.addEventListener('install', e => {

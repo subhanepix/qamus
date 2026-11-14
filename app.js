@@ -169,6 +169,7 @@ function route() {
   if (p.has('history') && Store) return historyView();
   if (p.has('vocab') && hasVocab()) return vocabView();
   if (p.get('folder') && hasVocab()) return folderView(p.get('folder'));
+  if (p.get('study') && hasVocab() && typeof studyView === 'function') return studyView(p.get('study').split(','), p.get('mode'));
   if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) { view = 'loading'; main.innerHTML = '<p class="muted">Loading dictionary…</p>'; } else home(); return; }
   view = 'result';
   if (p.get('e')) showEntry(+p.get('e'));
@@ -829,6 +830,7 @@ function initSync() {
       if (view === 'home') home();
       else if (view === 'history') historyView();
       else if (view === 'vocab' || view === 'folder') route();
+      // 'study' renders itself; a store change must not flip the card back mid-session
       else if (view === 'result' && hasVocab()) markSaved(main);
     };
     Store.on('change', refresh);
