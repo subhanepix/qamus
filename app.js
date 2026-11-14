@@ -167,6 +167,8 @@ function route() {
   $('#clear').hidden = !qEl.value;
   if (!p.has('history')) histConfirm = false;
   if (p.has('history') && Store) return historyView();
+  if (p.has('vocab') && hasVocab()) return vocabView();
+  if (p.get('folder') && hasVocab()) return folderView(p.get('folder'));
   if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) { view = 'loading'; main.innerHTML = '<p class="muted">Loading dictionary…</p>'; } else home(); return; }
   view = 'result';
   if (p.get('e')) showEntry(+p.get('e'));
@@ -184,6 +186,7 @@ function home() {
   const h = liveHistory().slice(0, HIST_HOME);
   main.innerHTML = `<div class="empty muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
     <p style="font-size:14px">Hamzas, harakat, ة/ه and ى/ي don’t matter. Prefixes and suffixes are stripped automatically.</p></div>
+    ${hasVocab() ? vocabLink() : ''}
     ${h.length ? `<div class="sec-row"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
     <div class="history">${h.map(({ q }) => `<button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>` : ''}`;
 }
@@ -321,6 +324,7 @@ function showRoots(rootIds, opt, q) {
   if (extra.length && rootIds.length) h += `<h2 class="sec">Also in lexicon</h2>` + extra.map(bwCard).join('');
   if (laneOnly.length) h += `<h2 class="sec">Lane’s Lexicon</h2>` + laneOnly.map(lr => laneBlock(lr, true)).join('');
   main.innerHTML = h || '<p class="muted">Nothing found.</p>';
+  if (hasVocab()) markSaved(main);
   main.querySelectorAll('details.lane[open]').forEach(fillLane);
   const first = main.querySelector('.word.hit, .forms tr.hit');
   if (first) requestAnimationFrame(() => first.scrollIntoView({ block: 'center' }));
@@ -349,7 +353,8 @@ function rootLabel(stem) {
 }
 function bwCard(a) {
   const R = rootLabel(a.stem);
-  return `<div class="bw"><span class="w" lang="ar">${esc(a.stem[4] || a.stem[0])}</span> ${esc(a.stem[2].replace(/;/g, '; '))}
+  const w = a.stem[4] || a.stem[0];
+  return `<div class="bw">${SB({ s: 'lexicon', r: w, w, g: a.stem[2].replace(/;/g, '; '), root: R }, w)}<span class="w" lang="ar">${esc(w)}</span> ${esc(a.stem[2].replace(/;/g, '; '))}
     <div class="muted" style="font-size:14px">${R ? `root <span lang="ar">${esc(R)}</span> · ` : ''}not in Hans Wehr</div></div>`;
 }
 
@@ -367,7 +372,7 @@ function wRoots(k) {  // build-time link to Hans Wehr, else the morphological an
 function wCard(k) {
   const e = W.entries[k], rs = wRoots(k);
   const R = rs.length ? [...byId.get(rs[0])[1]].join(' ') : '';
-  return `<div class="bw"><span class="w" lang="ar">${esc(e[0])}</span>${e[1] ? ` <i class="muted">${esc(e[1])}</i>` : ''}
+  return `<div class="bw">${SB({ s: 'wikt', r: String(k) }, e[0])}<span class="w" lang="ar">${esc(e[0])}</span>${e[1] ? ` <i class="muted">${esc(e[1])}</i>` : ''}
     <div class="def wk">${defHtml(e[2], ['i', 'br', 'ol', 'li'])}</div>
     ${R ? `<div class="muted" style="font-size:14px">root <span lang="ar">${esc(R)}</span></div>` : ''}</div>`;
 }
@@ -391,10 +396,11 @@ async function fillLane(d) {
     const shard = await laneShards.get(name);
     const items = shard[k] || [];
     body.classList.remove('muted');
-    body.innerHTML = items.length ? items.map(([w, def]) => {
+    body.innerHTML = items.length ? items.map(([w, def], i) => {
       const hit = lastLaneWord && (norm(w) === lastLaneWord || norm((def.match(/^[\u0600-\u06FF\u064B-\u0652 ]+/) || [''])[0]) === lastLaneWord);
-      return `<div class="word lane-entry ${hit ? 'hit' : ''}"><span class="def">${defHtml(def, ['i', 'br', 'table', 'tbody', 'tr', 'td', 'center'])}</span></div>`;
+      return `<div class="word lane-entry ${hit ? 'hit' : ''}">${SB({ s: 'lane', r: k + ':' + i }, w)}<span class="def">${defHtml(def, ['i', 'br', 'table', 'tbody', 'tr', 'td', 'center'])}</span></div>`;
     }).join('') : '<p class="muted">No entries.</p>';
+    if (hasVocab()) markSaved(body);
     const hit = body.querySelector('.hit'); if (hit) hit.scrollIntoView({ block: 'center' });
   } catch (err) { body.textContent = 'Couldn’t load Lane’s entry. Check your connection and try again.'; delete d.dataset.filled; }
 }
@@ -413,6 +419,11 @@ function bwRoot(rid) { // HW root -> Buckwalter-ish latin for ejtaal
   const T = { 'ا': 'A', 'أ': 'A', 'ب': 'b', 'ت': 't', 'ث': 'v', 'ج': 'j', 'ح': 'H', 'خ': 'x', 'د': 'd', 'ذ': '*', 'ر': 'r', 'ز': 'z', 'س': 's', 'ش': '$', 'ص': 'S', 'ض': 'D', 'ط': 'T', 'ظ': 'Z', 'ع': 'E', 'غ': 'g', 'ف': 'f', 'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h', 'و': 'w', 'ي': 'y', 'ى': 'y', 'ء': 'A' };
   return [...norm(e[1])].map(c => T[c] || '').join('');
 }
+// Save (bookmark) buttons come from vocab.js; without it (single-file preview) rows render as before.
+const hasVocab = () => !!Store && typeof vocabView === 'function';
+const SB = (payload, word) => (hasVocab() ? saveBtn(payload, word) : '');
+let formIdxMap = null;
+const formIdx = f => { if (!formIdxMap) formIdxMap = new Map(HW.forms.map((x, i) => [x, i])); return formIdxMap.get(f); };
 function rootCard(rid, hits, hitForms, open) {
   const root = byId.get(rid); if (!root) return '';
   const fs = formsBy.get(rid) || [];
@@ -427,12 +438,12 @@ function rootCard(rid, hits, hitForms, open) {
     <span class="meta">${root[5] ? `<span class="tag">Qur’an ${root[5]}×</span>` : ''}<span class="tag">${ks.length + 1} words</span></span>
     <span class="gist">${esc(gist)}</span></summary><div class="body">`;
   if (root[3] && formI) {
-    h += `<div class="word ${hits.has(rid) ? 'hit' : ''}" id="w${rid}"><span class="hw" lang="ar">${esc(root[1])}</span> <span class="def">${defHtml(formI)}</span></div>`;
+    h += `<div class="word ${hits.has(rid) ? 'hit' : ''}" id="w${rid}">${SB({ s: 'hw', r: String(rid) }, root[1])}<span class="hw" lang="ar">${esc(root[1])}</span> <span class="def">${defHtml(formI)}</span></div>`;
   }
   if (fs.length) {
-    h += `<table class="forms">` + fs.map(f => `<tr class="${hitForms.includes(f) ? 'hit' : ''}"><td class="num">${f[1]}</td><td class="verb" lang="ar">${esc(f[2])}</td><td class="def">${defHtml(f[3])}</td></tr>`).join('') + `</table>`;
+    h += `<table class="forms">` + fs.map(f => `<tr class="${hitForms.includes(f) ? 'hit' : ''}"><td class="num">${f[1]}</td><td class="verb" lang="ar">${esc(f[2])}</td><td class="def">${defHtml(f[3])}</td><td class="sv">${SB({ s: 'hw', r: 'f' + formIdx(f) }, f[2])}</td></tr>`).join('') + `</table>`;
   }
-  h += ks.map(k => `<div class="word ${hits.has(k[0]) ? 'hit' : ''}" id="w${k[0]}"><span class="hw" lang="ar">${esc(k[1])}</span><span class="def">${defHtml(stripHead(k))}</span></div>`).join('');
+  h += ks.map(k => `<div class="word ${hits.has(k[0]) ? 'hit' : ''}" id="w${k[0]}">${SB({ s: 'hw', r: String(k[0]) }, k[1])}<span class="hw" lang="ar">${esc(k[1])}</span><span class="def">${defHtml(stripHead(k))}</span></div>`).join('');
   h += laneBlock(norm(root[1]), false);
   const lat = bwRoot(rid);
   h += `<div class="links"><a href="https://ejtaal.net/aa/#q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Lane &amp; others (ejtaal)</a>
@@ -504,12 +515,30 @@ function migrateHist() {
   if (Store.persistent) { try { localStorage.removeItem('hist'); } catch {} }
 }
 
+// Re-renders (data loading, sync) must not steal focus or scroll position.
+function focusKey() {
+  const a = document.activeElement;
+  if (!a || !main.contains(a)) return null;
+  if (a.id) return '#' + CSS.escape(a.id);
+  const row = a.closest('[data-hq], [data-card]');
+  if (!row) return null;
+  const rk = row.dataset.hq != null ? `[data-hq="${CSS.escape(row.dataset.hq)}"]` : `[data-card="${CSS.escape(row.dataset.card)}"]`;
+  const cls = [...a.classList].find(c => ['hist-del', 'hist-q', 'cw', 'cg'].includes(c));
+  return cls ? `${rk} .${cls}` : (a.matches('input') ? `${rk} input` : null);
+}
+function renderKeepingFocus(next, html) {
+  const entering = view !== next;
+  const key = entering ? null : focusKey();
+  view = next;
+  main.innerHTML = html;
+  if (entering) window.scrollTo(0, 0);
+  else if (key) main.querySelector(key)?.focus({ preventScroll: true });
+}
 function historyView() {
-  view = 'history';
   main.dataset.empty = '';
   const items = liveHistory(), paused = historyPaused(), n = items.length;
   if (!n) histConfirm = false;
-  main.innerHTML = `<h2 class="sec">History${n ? ` · ${n} search${n === 1 ? '' : 'es'}` : ''}</h2>
+  renderKeepingFocus('history', `<h2 class="sec">History${n ? ` · ${n} search${n === 1 ? '' : 'es'}` : ''}</h2>
     <div class="hist-controls">
       <label class="switch"><input type="checkbox" id="hist-pause" ${paused ? 'checked' : ''}><span class="track" aria-hidden="true"></span>Pause recording</label>
       ${n ? `<button type="button" class="btn" id="hist-clear" ${histConfirm ? 'hidden' : ''}>Clear history</button>` : ''}
@@ -520,8 +549,7 @@ function historyView() {
     ${n ? `<ul class="hist-list">${items.map(h => `<li class="hist-row" data-hq="${esc(h.q)}">
       <button type="button" class="hist-q" data-q="${esc(h.q)}"><span class="w" ${qAttr(h.q)}>${esc(h.q)}</span><span class="hist-time">${relTime(h.t)}</span></button>
       <button type="button" class="hist-del" aria-label="Delete ${esc(h.q)}" title="Delete">×</button></li>`).join('')}</ul>`
-      : '<p class="muted">No searches yet.</p>'}`;
-  window.scrollTo(0, 0);
+      : '<p class="muted">No searches yet.</p>'}`);
 }
 const rowSel = q => `.hist-row[data-hq="${CSS.escape(q)}"]`;
 function deleteRow(row, { refocus } = {}) {
@@ -733,6 +761,7 @@ function accountSheet() {
       <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
       <div class="actions" id="ac-main">
         <button type="button" class="btn primary" id="ac-sync">Sync now</button>
+        <button type="button" class="btn" id="ac-vocab">Vocab</button>
         <button type="button" class="btn" id="ac-hist">Search history</button>
         <button type="button" class="btn quiet" id="ac-out">Sign out</button>
       </div>
@@ -777,6 +806,7 @@ function accountSheet() {
         const id = e.target.closest('button')?.id;
         if (id === 'ac-sync') Sync.syncNow();
         else if (id === 'ac-hist') { api.close(); go('history'); }
+        else if (id === 'ac-vocab') { api.close(); go('vocab'); }
         else if (id === 'ac-out') {
           const s = Sync.state;
           ask((s.dirty ? '<b>Some changes on this device haven’t synced yet</b>; they’ll be sent first. ' : '') +
@@ -795,8 +825,14 @@ function initSync() {
   if (!Store || !Sync) return;   // sync.js not loaded (e.g. a single-file preview build)
   Store.init().then(() => {
     migrateHist();
-    Store.on('change', () => { if (view === 'home') home(); else if (view === 'history') historyView(); });
-    if (view === 'home') home(); else if (view === 'history') historyView();
+    const refresh = () => {
+      if (view === 'home') home();
+      else if (view === 'history') historyView();
+      else if (view === 'vocab' || view === 'folder') route();
+      else if (view === 'result' && hasVocab()) markSaved(main);
+    };
+    Store.on('change', refresh);
+    refresh();
     if (!SYNC_URL) return;
     Sync.on('status', renderAcct);
     Sync.init({ url: SYNC_URL });

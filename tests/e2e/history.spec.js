@@ -3,9 +3,11 @@ const { test, expect, newDevice, fold } = require('./fixtures');
 
 const live = page => page.evaluate(() => liveHistory().map(h => h.q));
 const seed = (page, entries) => page.evaluate(es => QamusStore.mutate(d => { d.history = es; }), entries);
+// Waits for the dictionary data too: load() re-runs route() as each file arrives, which re-renders the view.
 async function boot(page, path = '/') {
   await page.goto(path);
   await page.evaluate(() => QamusStore.init());
+  await page.waitForFunction(() => typeof W !== 'undefined' && W !== null && laneRoots !== null);
 }
 async function dataReady(page) {
   await page.waitForFunction(() => typeof W !== 'undefined' && W !== null && laneRoots !== null);
@@ -193,9 +195,8 @@ test.describe('local history', () => {
       await page.getByRole('button', { name: 'Clear history' }).click();
       const m = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
       expect(m.sw).toBeLessThanOrEqual(m.cw);
-      for (const h of await page.locator('.hist-del, .switch, #hist-clear-yes').evaluateAll(es => es.map(e => Math.round(e.getBoundingClientRect().height)))) {
-        expect(h).toBeGreaterThanOrEqual(44);
-      }
+      const hs = await page.locator('.hist-del, .switch, #hist-clear-yes').evaluateAll(es => es.map(e => [e.className || e.id, e.outerHTML.slice(0, 80), getComputedStyle(e).display, Math.round(e.getBoundingClientRect().height)]));
+      for (const [label, html, disp, h] of hs) expect(h, `${label} ${disp} ${html}`).toBeGreaterThanOrEqual(44);
     });
   }
 });
