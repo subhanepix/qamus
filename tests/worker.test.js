@@ -106,7 +106,33 @@ test('422 when the merged result exceeds limits', async () => {
   assert.equal((await worker.fetch(req('PUT', '/u/user1', { body: b }), env)).status, 422);
 });
 
-test('429 on the 61st write in a minute', async () => {
+test('a sync costs exactly one KV write (rate limiting stays out of KV)', async () => {
+  const env = makeEnv();
+  let puts = 0;
+  const put = env.QAMUS.put; env.QAMUS.put = async (k, v) => { puts++; return put(k, v); };
+  for (let i = 0; i < 3; i++) assert.equal((await worker.fetch(req('PUT', '/u/one-write', { body: empty() }), env)).status, 200);
+  assert.equal(puts, 3);
+  assert.deepEqual([...env.store.keys()], ['user:one-write']);
+});
+
+test('uses the WRITES rate-limit binding when present: 429 when it says no, fails open if it throws', async () => {
+  const env = makeEnv();
+  const calls = [];
+  let allow = true;
+  env.WRITES = { async limit(o) { calls.push(o.key); if (allow === 'throw') throw new Error('limiter down'); return { success: allow }; } };
+  assert.equal((await worker.fetch(req('PUT', '/u/bound-user', { body: empty() }), env)).status, 200);
+  assert.deepEqual(calls, ['bound-user']);
+  allow = false;
+  const before = env.store.get('user:bound-user');
+  const r = await worker.fetch(req('PUT', '/u/bound-user', { body: { ...empty(), cards: [card('c1', 5)] } }), env);
+  assert.equal(r.status, 429);
+  assert.equal(r.headers.get('Retry-After'), '60');
+  assert.equal(env.store.get('user:bound-user'), before);   // nothing written
+  allow = 'throw';
+  assert.equal((await worker.fetch(req('PUT', '/u/bound-user', { body: empty() }), env)).status, 200);
+});
+
+test('429 on the 61st write in a minute (fallback counter, no binding)', async () => {
   const env = makeEnv();
   // Pin the clock mid-minute so the test never straddles a window boundary.
   const realNow = Date.now;

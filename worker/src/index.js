@@ -33,11 +33,24 @@ async function readBody(req) {
   return { text: new TextDecoder().decode(buf) };
 }
 
+// Rate limiting never touches KV: KV writes are the free plan's tightest limit (1,000/day), so each
+// sync now costs exactly one write. Production uses the Workers rate-limiting binding (WRITES in
+// wrangler.toml). Without it (unit tests, local runtimes lacking the binding) a per-isolate counter
+// gives best-effort limiting.
+const memWindows = new Map();
 async function rateLimited(env, user, now) {
-  const key = `rl:${user}:${Math.floor(now / 60000)}`;
-  const n = Number(await env.QAMUS.get(key)) || 0;
+  if (env.WRITES && typeof env.WRITES.limit === 'function') {
+    try {
+      const { success } = await env.WRITES.limit({ key: user });
+      return success ? 0 : 60;
+    } catch { return 0; }   // fail open: a limiter hiccup must not block sync
+  }
+  const win = Math.floor(now / 60000);
+  const e = memWindows.get(user);
+  const n = e && e.win === win ? e.n : 0;
   if (n >= RATE_PER_MIN) return Math.ceil((60000 - (now % 60000)) / 1000) || 1;
-  await env.QAMUS.put(key, String(n + 1), { expirationTtl: 120 });
+  memWindows.set(user, { win, n: n + 1 });
+  if (memWindows.size > 5000) for (const [k, v] of memWindows) if (v.win < win) memWindows.delete(k);
   return 0;
 }
 

@@ -116,7 +116,7 @@ Each username has one JSON document: `history`, `folders`, `cards`, `reviews` an
 - **Reviews:** per card, the larger `updatedAt` wins. Browse marks live there as `mark` (1 = got it, 2 = again).
 - **History:** each query keeps only its newest entry. Deleting an entry writes a tombstone. "Clear history" sets `settings.historyClearedAt`. At most 500 live entries.
 
-**Limits:** 1 MB per document, 5,000 cards, 500 folders, 60 writes per minute per username.
+**Limits:** 1 MB per document, 5,000 cards, 500 folders, 60 writes per minute per username (Cloudflare's rate-limiting binding, so each sync costs a single KV write; the free plan allows 1,000 KV writes a day).
 
 **Caveats:**
 - The username is the only secret.

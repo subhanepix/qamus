@@ -12,7 +12,7 @@ Errors are JSON `{ "error": "..." }`. The status codes are:
 - `400`: bad username or bad JSON
 - `413`: the body is over 1 MB
 - `422`: the body fails schema validation or exceeds a limit (5,000 cards, 500 folders)
-- `429`: more than 60 writes per minute for that username; check `Retry-After`
+- `429`: more than 60 writes per minute for that username; check `Retry-After`. The limit uses the Workers rate-limiting binding (`WRITES` in `wrangler.toml`), not KV, so each sync costs one KV write.
 
 ## One-time setup
 ```bash

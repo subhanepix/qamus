@@ -11,3 +11,9 @@ id = "0935be5a50ed43f5981630d0a8d5ef83"
 [vars]
 # The GitHub Pages origin of the site (scheme + host, no path, no trailing slash).
 ALLOWED_ORIGIN = "https://subhanepix.github.io"
+
+# Per-username write limit (60 a minute), kept out of KV so each sync costs one KV write.
+[[ratelimits]]
+name = "WRITES"
+namespace_id = "1001"
+simple = { limit = 60, period = 60 }
