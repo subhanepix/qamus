@@ -33,7 +33,8 @@ It does three things:
   - **Browse** is a flip card with Again / Got it marks, filter chips and Shuffle (after the "دع الأيام Vocabulary" page);
   - **Review** is SM-2 spaced repetition (Again / Hard / Good / Easy) over the cards due today;
   - you can study several folders at once.
-- **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. At 900px and wider, a side panel lists recent searches and the folder tree with due counts, and a status bar shows where your data is saved and the keys that work on the current screen. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#account`.
+- **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. At 900px and wider, a side panel lists recent searches and the folder tree with due counts, and a status bar shows where your data is saved and the keys that work on the current screen. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#settings`, `#account`.
+- **Settings** (`#settings`, from the gear beside the search field on the home and result pages): turn each dictionary on or off, drag them into the order they show in results (or use the arrow keys on a row's handle), and show or hide the "Parsed" word analysis. Settings sync with your account. An entry you open directly (from Vocab or a link) always shows, even if its dictionary is off.
 - **Keyboard:**
   - `/` or ⌘K focuses search;
   - Esc leaves study or a folder;
@@ -84,7 +85,8 @@ npm test                          # unit tests, then the Playwright suite (run b
   | `history` | recording, dedupe, delete/clear/pause, migration, sync |
   | `vocab` | bookmarks, save sheet, folders, folder view, import/export |
   | `study` | Browse, marks, filters, Review/SM-2, keyboard, swipe, offline |
-  | `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
+  | `settings` | the header gear, the settings page, drag and keyboard reordering, dictionaries on/off, the word-analysis toggle, reset |
+| `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
 
 ## Project layout
 

@@ -175,6 +175,7 @@ function route() {
   document.body.classList.toggle('studying', name === 'study');
   if (!p.has('history')) histConfirm = false;
   if (name === 'account') return accountRoute();
+  if (p.has('settings')) return settingsView();
   if (p.has('history') && Store) return historyView();
   if (p.has('vocab') && hasVocab()) return vocabView();
   if (p.get('folder') && hasVocab()) return folderView(p.get('folder'));
@@ -182,8 +183,8 @@ function route() {
   if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) { view = 'loading'; main.innerHTML = '<p class="muted">Loading dictionary…</p>'; } else home(); return; }
   view = 'result';
   if (p.get('e')) showEntry(+p.get('e'));
-  else if (p.get('f')) { const f = HW.forms[+p.get('f')]; showRoots([f[0]], { forms: [f] }, q); }
-  else if (p.get('w')) { if (!W) { view = 'loading'; main.innerHTML = '<p class="muted">Loading Wiktionary…</p>'; return; } const k = +p.get('w'); showRoots(wRoots(k), { wikt: [k] }, q); }
+  else if (p.get('f')) { const f = HW.forms[+p.get('f')]; showRoots([f[0]], { forms: [f], force: 'hw' }, q); }
+  else if (p.get('w')) { if (!W) { view = 'loading'; main.innerHTML = '<p class="muted">Loading Wiktionary…</p>'; return; } const k = +p.get('w'); showRoots(wRoots(k), { wikt: [k], force: 'wikt' }, q); }
   else if (q.trim()) search(q);
   else return home();
   if (q) recordSearch(q);   // a result view is on screen: record it (never on keystrokes)
@@ -191,6 +192,7 @@ function route() {
 
 function routeName(p) {
   if (p.has('history')) return 'history';
+  if (p.has('settings')) return 'settings';
   if (p.has('vocab')) return 'vocab';
   if (p.get('folder')) return 'folder';
   if (p.get('study')) return 'study';
@@ -203,12 +205,104 @@ function pageTitle(name, p) {
   const ids = (p.get('study') || '').split(',').filter(Boolean);
   const t = {
     result: p.get('q') || '',
-    vocab: 'Vocab', history: 'History', account: 'Account',
+    vocab: 'Vocab', history: 'History', account: 'Account', settings: 'Settings',
     folder: fname(p.get('folder')),
     study: 'Study · ' + (ids.length > 1 ? `${ids.length} folders` : fname(ids[0])),
   }[name];
   return t ? `${t} · Qamus` : 'Qamus';
 }
+
+// ---------- settings page ----------
+function settingsView() {
+  main.dataset.empty = '';
+  const pr = resultPrefs(), n = pr.order.length;
+  const row = (id, i) => {
+    const d = DICTS.find(x => x.id === id), isOn = !pr.off.has(id);
+    return `<li class="set-row${isOn ? '' : ' off'}" data-dict="${id}">
+      <span class="set-pos" aria-hidden="true">${i + 1}</span>
+      <label class="switch set-switch"><input type="checkbox" data-dict-on="${id}" ${isOn ? 'checked' : ''}><span class="track" aria-hidden="true"></span>
+        <span class="set-text"><span class="set-name">${esc(d.name)}</span><span class="set-desc">${esc(d.desc)}</span></span></label>
+      <button type="button" class="set-drag" data-id="${id}" aria-label="Reorder ${esc(d.name)}, position ${i + 1} of ${n}. Drag, or use the up and down arrow keys."
+        title="Drag to reorder"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button></li>`;
+  };
+  const allOff = pr.order.every(id => pr.off.has(id));
+  renderKeepingFocus('settings', `<nav class="crumbs" aria-label="Breadcrumb"><button type="button" class="crumb" data-go="">Search</button></nav>
+    <h2 class="sec">Dictionaries</h2>
+    <p class="set-note muted">Results show in this order; drag a row by its handle to change it. Turn a dictionary off to hide it from search results. An entry you open from Vocab or a link still shows.</p>
+    <ol class="set-list" id="set-dicts">${pr.order.map(row).join('')}</ol>
+    ${allOff ? '<p class="form-msg err set-warn">Every dictionary is off, so searches will only show the word analysis.</p>' : ''}
+    <h2 class="sec">Word analysis</h2>
+    <ul class="set-list"><li class="set-row"><label class="switch set-switch"><input type="checkbox" id="set-parse" ${pr.parse ? 'checked' : ''}><span class="track" aria-hidden="true"></span>
+      <span class="set-text"><span class="set-name">Show the “Parsed” breakdown</span><span class="set-desc">Prefix · stem · suffix, with what each part means</span></span></label></li></ul>
+    <div class="actions"><button type="button" class="btn quiet" id="set-reset">Reset to defaults</button></div>
+    ${Store ? (SYNC_URL ? '<p class="set-note muted">These settings sync to your other devices.</p>' : '') : '<p class="set-note muted">Settings can’t be saved in this preview.</p>'}`);
+}
+main.addEventListener('change', e => {
+  if (view !== 'settings') return;
+  const t = e.target, pr = resultPrefs();
+  if (t.dataset.dictOn) { const off = new Set(pr.off); if (t.checked) off.delete(t.dataset.dictOn); else off.add(t.dataset.dictOn); setResultPrefs({ off }); main.querySelector(`[data-dict-on="${t.dataset.dictOn}"]`)?.focus(); }
+  else if (t.id === 'set-parse') { setResultPrefs({ parse: t.checked }); $('#set-parse')?.focus(); }
+});
+main.addEventListener('click', e => {
+  if (view !== 'settings') return;
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.id === 'set-reset') {
+    setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true });
+    $('#set-reset')?.focus();
+  }
+});
+
+// Reorder dictionaries: drag a row by its handle (touch, pen or mouse), or arrow keys on the handle.
+function moveDict(id, to) {
+  const order = resultPrefs().order.filter(x => x !== id);
+  order.splice(Math.max(0, Math.min(to, order.length)), 0, id);
+  setResultPrefs({ order });
+  main.querySelector(`.set-drag[data-id="${id}"]`)?.focus();
+}
+main.addEventListener('keydown', e => {
+  const h = view === 'settings' && e.target.closest?.('.set-drag');
+  if (!h || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+  e.preventDefault();
+  const i = resultPrefs().order.indexOf(h.dataset.id);
+  moveDict(h.dataset.id, i + (e.key === 'ArrowUp' ? -1 : 1));
+});
+let dictDrag = null;
+main.addEventListener('pointerdown', e => {
+  const h = view === 'settings' && e.target.closest('.set-drag');
+  if (!h || e.button !== 0) return;
+  e.preventDefault();
+  const row = h.closest('.set-row');
+  dictDrag = { row, list: row.parentElement, handle: h, pid: e.pointerId, y0: e.clientY, top0: row.getBoundingClientRect().top, shift: 0 };
+  row.classList.add('dragging');
+  try { h.setPointerCapture(e.pointerId); } catch {}
+});
+main.addEventListener('pointermove', e => {
+  const d = dictDrag;
+  if (!d || e.pointerId !== d.pid) return;
+  e.preventDefault();
+  // put the row before the first sibling whose middle is below the pointer
+  const before = [...d.list.children].find(r => r !== d.row && e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2) || null;
+  if (before !== d.row.nextElementSibling) d.list.insertBefore(d.row, before);
+  // then keep it under the pointer: offset from where the row now sits without its transform
+  const natural = d.row.getBoundingClientRect().top - d.shift;
+  d.shift = e.clientY - d.y0 - (natural - d.top0);
+  d.row.style.transform = `translateY(${d.shift}px)`;
+});
+function endDictDrag(e) {
+  const d = dictDrag;
+  if (!d || e.pointerId !== d.pid) return;
+  dictDrag = null;
+  d.row.style.transform = '';
+  d.row.classList.remove('dragging');
+  const order = [...d.list.children].map(r => r.dataset.dict);
+  if (order.join() !== resultPrefs().order.join()) setResultPrefs({ order });
+  main.querySelector(`.set-drag[data-id="${d.handle.dataset.id}"]`)?.focus({ preventScroll: true });
+}
+main.addEventListener('pointerup', endDictDrag);
+main.addEventListener('pointercancel', endDictDrag);
+
+$('#settings-btn')?.addEventListener('click', () => go('settings'));
 
 // ---------- side panel (wide screens): recent searches and the folder tree ----------
 const sideEl = $('#side');
@@ -256,8 +350,13 @@ function renderStat(st) {
 
 // ---------- tabs: Search · Vocab · History ----------
 const tabsEl = $('#tabs');
-const TAB_OF = { home: 'search', result: 'search', account: null, vocab: 'vocab', folder: 'vocab', study: 'vocab', history: 'history' };
+const TAB_OF = { home: 'search', result: 'search', settings: 'search', account: null, vocab: 'vocab', folder: 'vocab', study: 'vocab', history: 'history' };
+const setBtn = $('#settings-btn');
 function setTab(name) {
+  if (setBtn) {
+    setBtn.hidden = !['home', 'result', 'settings'].includes(name);
+    if (name === 'settings') setBtn.setAttribute('aria-current', 'page'); else setBtn.removeAttribute('aria-current');
+  }
   if (!tabsEl) return;
   const on = hasVocab();
   tabsEl.hidden = !on;
@@ -450,26 +549,61 @@ function englishSearch(q) {
     (scored.length ? scored.slice(0, 80).map(x => item(x[1])).join('') : '<p class="muted">Nothing found.</p>');
 }
 
+// ---------- result preferences: which dictionaries show, in what order, and the word analysis ----------
+const DICTS = [
+  { id: 'wikt', name: 'Wiktionary', desc: 'Modern words, inflected forms and broken plurals' },
+  { id: 'hw', name: 'Hans Wehr', desc: 'Roots, verb forms and derived words' },
+  { id: 'lexicon', name: 'Buckwalter lexicon', desc: 'Short glosses for words missing from Hans Wehr' },
+  { id: 'lane', name: 'Lane’s Lexicon', desc: 'Classical Arabic, in depth; loads on demand' },
+];
+const DICT_IDS = DICTS.map(d => d.id);
+function resultPrefs() {
+  const st = (Store && Store.doc && Store.doc.settings) || {};
+  const order = String(st.dictOrder || '').split(',').filter((id, i, a) => DICT_IDS.includes(id) && a.indexOf(id) === i);
+  for (const id of DICT_IDS) if (!order.includes(id)) order.push(id);
+  const off = new Set(String(st.dictOff || '').split(',').filter(id => DICT_IDS.includes(id)));
+  return { order, off, parse: st.showParse !== false };
+}
+function setResultPrefs({ order, off, parse }) {
+  if (!Store) return;
+  Store.mutate(d => {
+    const next = { ...d.settings, updatedAt: Date.now() };
+    if (order) next.dictOrder = order.join(',');
+    if (off) next.dictOff = [...off].join(',');
+    if (parse !== undefined) next.showParse = !!parse;
+    d.settings = next;
+  });
+}
+
 function showEntry(id) {
   const e = byId.get(id); if (!e) return home();
-  showRoots([e[4]], { hits: new Set([id]) }, e[1]);
+  showRoots([e[4]], { hits: new Set([id]), force: 'hw' }, e[1]);   // an entry you opened always shows
 }
 
 function showRoots(rootIds, opt, q) {
-  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '' } = opt;
+  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', force = '' } = opt;
   main.dataset.empty = '';
   lastLaneWord = laneWord;
-  let h = '';
-  if (wikt.length) h += `<h2 class="sec">Wiktionary</h2>` + wikt.map(wCard).join('');
-  if (parses.length) {
-    h += `<h2 class="sec">Parsed</h2>` + uniqParses(parses).slice(0, 4).map(parseHtml).join('');
-  }
+  const pr = resultPrefs();
+  const on = id => id === force || !pr.off.has(id);
   const extra = uniqParses(bwOnly).slice(0, 6);
-  if (extra.length && !rootIds.length) h += `<h2 class="sec">Lexicon</h2>` + extra.map(bwCard).join('');
-  if (rootIds.length) h += `<h2 class="sec">${rootIds.length > 1 ? 'Roots' : 'Root'}</h2>`;
-  rootIds.forEach((rid, k) => { h += rootCard(rid, hits, forms, k === 0 || rootIds.length <= 2); });
-  if (extra.length && rootIds.length) h += `<h2 class="sec">Also in lexicon</h2>` + extra.map(bwCard).join('');
-  if (laneOnly.length) h += `<h2 class="sec">Lane’s Lexicon</h2>` + laneOnly.map(lr => laneBlock(lr, true)).join('');
+  const has = { wikt: wikt.length, hw: rootIds.length, lexicon: extra.length, lane: laneOnly.length };
+  let h = '', rootsShown = false, hidden = false;
+  pr.order.forEach((id, i) => {
+    if (!has[id]) { /* nothing from this dictionary */ }
+    else if (!on(id)) hidden = true;
+    else if (id === 'wikt') h += `<h2 class="sec">Wiktionary</h2>` + wikt.map(wCard).join('');
+    else if (id === 'hw') {
+      h += `<h2 class="sec">${rootIds.length > 1 ? 'Roots' : 'Root'}</h2>`;
+      rootIds.forEach((rid, k) => { h += rootCard(rid, hits, forms, k === 0 || rootIds.length <= 2, on('lane')); });
+      rootsShown = true;
+    }
+    else if (id === 'lexicon') h += `<h2 class="sec">${rootsShown ? 'Also in lexicon' : 'Lexicon'}</h2>` + extra.map(bwCard).join('');
+    else if (id === 'lane') h += `<h2 class="sec">Lane’s Lexicon</h2>` + laneOnly.map(lr => laneBlock(lr, true)).join('');
+    // the word analysis sits after the first dictionary in your order, as it did after Wiktionary by default
+    if (i === 0 && pr.parse && parses.length) h += `<h2 class="sec">Parsed</h2>` + uniqParses(parses).slice(0, 4).map(parseHtml).join('');
+  });
+  if (hidden) h += `<p class="muted hidden-note">Some results are hidden by your <a href="#settings" data-go="settings">dictionary settings</a>.</p>`;
   main.innerHTML = h || '<p class="muted">Nothing found.</p>';
   if (hasVocab()) markSaved(main);
   main.querySelectorAll('details.lane[open]').forEach(fillLane);
@@ -572,7 +706,7 @@ const hasVocab = () => !!Store && typeof vocabView === 'function';
 const SB = (payload, word) => (hasVocab() ? saveBtn(payload, word) : '');
 let formIdxMap = null;
 const formIdx = f => { if (!formIdxMap) formIdxMap = new Map(HW.forms.map((x, i) => [x, i])); return formIdxMap.get(f); };
-function rootCard(rid, hits, hitForms, open) {
+function rootCard(rid, hits, hitForms, open, lane = true) {
   const root = byId.get(rid); if (!root) return '';
   const fs = formsBy.get(rid) || [];
   const s = stripHead(root);
@@ -592,7 +726,7 @@ function rootCard(rid, hits, hitForms, open) {
     h += `<table class="forms">` + fs.map(f => `<tr class="${hitForms.includes(f) ? 'hit' : ''}"><td class="num">${f[1]}</td><td class="verb" lang="ar">${esc(f[2])}</td><td class="def">${defHtml(f[3])}</td><td class="sv">${SB({ s: 'hw', r: 'f' + formIdx(f) }, f[2])}</td></tr>`).join('') + `</table>`;
   }
   h += ks.map(k => `<div class="word ${hits.has(k[0]) ? 'hit' : ''}" id="w${k[0]}">${SB({ s: 'hw', r: String(k[0]) }, k[1])}<span class="hw" lang="ar">${esc(k[1])}</span><span class="def">${defHtml(stripHead(k))}</span></div>`).join('');
-  h += laneBlock(norm(root[1]), false);
+  if (lane) h += laneBlock(norm(root[1]), false);
   const lat = bwRoot(rid);
   h += `<div class="links"><a href="https://ejtaal.net/aa/#q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Lane &amp; others (ejtaal)</a>
     <a href="https://corpus.quran.com/qurandictionary.jsp?q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Qur’an corpus</a></div>`;
@@ -975,6 +1109,7 @@ function initSync() {
     const refresh = () => {
       if (view === 'home') home();
       else if (view === 'history') historyView();
+      else if (view === 'settings') settingsView();
       else if (view === 'vocab' || view === 'folder') route();
       // 'study' renders itself; a store change must not flip the card back mid-session
       else if (view === 'result' && hasVocab()) markSaved(main);
