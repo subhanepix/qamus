@@ -1,6 +1,7 @@
-const VERSION = 'qamus-v13';
+const VERSION = 'qamus-v14';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'vocab.js', 'study.js', 'manifest.webmanifest', 'icon-512.png',
-  'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json'];
+  'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json',
+  'data/mufradat/roots.json', 'data/mukhtar/roots.json'];
 
 self.addEventListener('install', e => {
   // cache: 'reload' bypasses the HTTP cache so a new VERSION never stores stale copies.

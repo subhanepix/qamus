@@ -3,7 +3,7 @@
  * Classic script loaded after app.js; uses its globals (Store, esc, norm, plain, go, sheet, byId, HW, W, …). */
 
 const INBOX = 'f_inbox';
-const CARD_SOURCES = ['hw', 'wikt', 'lane', 'lexicon', 'custom'];
+const CARD_SOURCES = ['hw', 'wikt', 'lane', 'lexicon', 'mufradat', 'mukhtar', 'custom'];
 const CSV_FIELDS = ['word', 'gloss', 'arGloss', 'root', 'translit', 'context', 'note', 'tags'];   // SPEC §5 column order
 const TEXT_FIELDS = ['word', 'gloss', 'arGloss', 'root', 'translit', 'context', 'highlight', 'note'];
 const MAX_TXT = 2048, MAX_CARDS = 5000, MAX_BYTES = 1000000;
@@ -267,6 +267,10 @@ async function prefill(p) {
     const [w, def] = shard[k][i];
     f.word = w; f.root = [...k].join(' ');
     f.gloss = shortGloss(def.startsWith(w) ? def.slice(w.length) : def);
+  } else if (AR_DICTS[p.s]) {
+    const at = f.ref.lastIndexOf(':'), { head, html } = await arEntry(p.s, f.ref);
+    f.word = head; f.root = [...f.ref.slice(0, at)].join(' ');
+    f.arGloss = shortGloss(plain(html.replace(/^<b>.*?<\/b>:\s*/, '')));
   } else if (p.s === 'lexicon') {
     f.word = p.w || ''; f.gloss = shortGloss(p.g || ''); f.root = p.root || '';
   }
@@ -350,7 +354,7 @@ function openCard(c) {   // the card's dictionary entry, else a normal search
   if (c.source === 'hw' && /^\d+$/.test(r) && (!HW || byId.has(+r))) go({ e: r, q: c.word });
   else if (c.source === 'hw' && /^f\d+$/.test(r) && (!HW || HW.forms[+r.slice(1)])) go({ f: r.slice(1), q: c.word });
   else if (c.source === 'wikt' && /^\d+$/.test(r) && (!W || W.entries[+r])) go({ w: r, q: c.word });
-  else if (c.source === 'lane' && r.includes(':')) { const q = [...r.slice(0, r.lastIndexOf(':'))].join(' '); qEl.value = q; go({ q }); }
+  else if ((c.source === 'lane' || c.source === 'mufradat' || c.source === 'mukhtar') && r.includes(':')) { const q = [...r.slice(0, r.lastIndexOf(':'))].join(' '); qEl.value = q; go({ q }); }
   else { qEl.value = c.word; go({ q: c.word }); }
 }
 

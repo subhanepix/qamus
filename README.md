@@ -3,7 +3,7 @@
 Personal Arabic–English dictionary: a static site on GitHub Pages, installed as a PWA on iPad and iPhone, that works offline once loaded.
 
 It does three things:
-- Looks words up in Hans Wehr, a morphological lexicon, Wiktionary and Lane's Lexicon.
+- Looks words up in Hans Wehr, a morphological lexicon, Wiktionary and Lane's Lexicon, plus two Arabic–Arabic dictionaries: al-Rāghib's al-Mufradāt and al-Rāzī's Mukhtār al-Ṣiḥāḥ.
 - Keeps a search history and vocab folders, which sync across devices through a small Cloudflare Worker.
 - Lets you study saved words as flashcards, either browsing them or with spaced repetition.
 
@@ -14,6 +14,7 @@ It does three things:
 - **Buckwalter morphological lexicon** (~82k stems with English glosses, prefix/suffix tables). It strips و ف ب ل ك س ال and pronoun/plural/verb endings, then maps the stem to its Hans Wehr root. It also covers modern words missing from Hans Wehr.
 - **Wiktionary** (15.4k entries, 232k inflected forms including broken plurals and conjugations), from English Wiktionary via Vuizur/Wiktionary-Dictionaries. CC BY-SA 3.0 / GFDL.
 - **Lane's Lexicon** (47.8k entries under 5k roots), from GibreelAbdullah/LaneLexicon. It's split into one file per first letter and loaded only when you open a root's Lane section.
+- **al-Mufradāt fī gharīb al-Qur’ān** by al-Rāghib al-Iṣfahānī (1,591 entries) and **Mukhtār al-Ṣiḥāḥ** by al-Rāzī (3,263 entries). Both are in Arabic and come from the [OpenITI](https://openiti.org) corpus (CC BY-NC-SA 4.0), whose texts have no vowel marks. Each is split by root into one file per first letter, loaded when a result needs it. They show as their own sections, after the other dictionaries by default; every word in them can be tapped to look it up, and the word you searched is highlighted.
 - **Matching:** search ignores harakat, tatweel and hamza spelling (ء أ إ آ ٱ ؤ ئ all match ا), and treats ة/ه and ى/ي as the same.
 - **What you can type:** an Arabic word in any inflection, a root with spaces or dashes (`ك ت ب`), English, or transliteration (`kitab`).
 - **Tap to look up:** tap any Arabic word inside a definition to look it up.
@@ -85,8 +86,9 @@ npm test                          # unit tests, then the Playwright suite (run b
   | `history` | recording, dedupe, delete/clear/pause, migration, sync |
   | `vocab` | bookmarks, save sheet, folders, folder view, import/export |
   | `study` | Browse, marks, filters, Review/SM-2, keyboard, swipe, offline |
+  | `arabic` | the two Arabic–Arabic dictionaries: sections, highlighting, tap to look up, roots only they have, saving |
   | `settings` | the header gear, the settings page, drag and keyboard reordering, dictionaries on/off, the word-analysis toggle, reset |
-| `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
+  | `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
 
 ## Project layout
 
@@ -102,7 +104,7 @@ npm test                          # unit tests, then the Playwright suite (run b
 | `style.css` | design tokens (light and dark) and all styles: flat, ruled, one accent; `--bg` is chrome and `--card` is the reading pane |
 | `worker/` | the Cloudflare Worker (`wrangler.toml`, `src/index.js`) |
 | `tests/` | unit tests, Playwright specs, `serve.js` (static server for dev and tests) |
-| `build/`, `data/` | the dictionary data and the scripts that build it |
+| `build/`, `data/` | the dictionary data and the scripts that build it (`data/lane/`, `data/mufradat/`, `data/mukhtar/` are split by first letter) |
 
 ## Data and sync model
 
@@ -129,5 +131,6 @@ Each username has one JSON document: `history`, `folders`, `cards`, `reviews` an
 ```
 python3 build/build.py <hanswehr.sqlite> <pyaramorph data dir> data/
 python3 build/build_extra.py <wiktionary stardict dir> <lanelexicon.sqlite> data/
+python3 build/build_arabic.py <Mufradat.JK001150-ara1> <MukhtarSihah.Shamela0023193-ara1> data/
 ```
-Run them in that order: `build_extra.py` adds to the index that `build.py` writes. After changing anything, bump `VERSION` in `sw.js` so the iPad picks up the update.
+Run them in that order: `build_extra.py` adds to the index that `build.py` writes, and `build_arabic.py` files its entries under Hans Wehr's roots. The two OpenITI texts are in the [0525AH](https://github.com/OpenITI/0525AH/tree/master/data/0502RaghibIsbahani/0502RaghibIsbahani.Mufradat) and [0675AH](https://github.com/OpenITI/0675AH/tree/master/data/0666IbnAbiBakrZaynDinRazi/0666IbnAbiBakrZaynDinRazi.MukhtarSihah) repositories. After changing anything, bump `VERSION` in `sw.js` so the iPad picks up the update.

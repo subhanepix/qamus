@@ -46,8 +46,10 @@ async function load() {
   for (const r of IDX) if (r[2] === 'l') push(laneIdx, r[0], r[3]);
   route();
   // second wave: Wiktionary and the Lane root list
-  const [w, lr] = await Promise.all([j('data/wikt.json'), j('data/lane/roots.json').catch(() => [])]);
+  const [w, lr, ...ar] = await Promise.all([j('data/wikt.json'), j('data/lane/roots.json').catch(() => []),
+    ...AR_IDS.map(id => j(AR_DICTS[id].dir + 'roots.json').catch(() => []))]);
   laneRoots = new Set(lr);
+  AR_IDS.forEach((id, i) => { arRoots[id] = new Set(ar[i]); });
   w.entries.forEach((e, k) => {
     push(wForm, norm(e[0]), k);
     if (w.forms[k]) for (const f of w.forms[k].split(' ')) push(wForm, f, k);
@@ -446,6 +448,7 @@ function search(q) {
   if (letters.length >= 2 && letters.every(x => norm(x).length === 1)) {
     const r = rootIdsFor(norm(letters.join('')));
     if (r.length) return showRoots(r, {}, q);
+    if (arHas(norm(letters.join('')))) return showRoots([], { arWord: letters.join('') }, q);
   }
 
   const words = q.split(/\s+/).filter(Boolean);
@@ -471,9 +474,10 @@ function search(q) {
   // mark HW words matching the parsed stems/lemmas
   for (const a of parses) for (const k of [norm(a.stem[0]), norm(a.stem[4] || '')]) for (const e of hwNorm.get(k) || []) if (roots.includes(e[4])) hits.add(e[0]);
 
-  if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length) return fallback(q, n);
+  const arWord = roots.length ? '' : n;   // a root only the Arabic dictionaries have
+  if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length && !arHas(n)) return fallback(q, n);
   const directHit = hits.size || forms.length || wikt.length;
-  showRoots(roots, { hits, forms, parses: directHit && !parses.some(a => a.affixLen) ? [] : parses, bwOnly, wikt, laneOnly, laneWord: laneHit.size ? n : '' }, q);
+  showRoots(roots, { hits, forms, parses: directHit && !parses.some(a => a.affixLen) ? [] : parses, bwOnly, wikt, laneOnly, laneWord: laneHit.size ? n : '', arWord }, q);
 }
 
 function rootVariants(n) {
@@ -555,6 +559,8 @@ const DICTS = [
   { id: 'hw', name: 'Hans Wehr', desc: 'Roots, verb forms and derived words' },
   { id: 'lexicon', name: 'Buckwalter lexicon', desc: 'Short glosses for words missing from Hans Wehr' },
   { id: 'lane', name: 'Lane’s Lexicon', desc: 'Classical Arabic, in depth; loads on demand' },
+  { id: 'mufradat', name: 'al-Mufradāt', desc: 'al-Rāghib al-Iṣfahānī on Qur’anic words, in Arabic' },
+  { id: 'mukhtar', name: 'Mukhtār al-Ṣiḥāḥ', desc: 'al-Rāzī’s classical dictionary, in Arabic' },
 ];
 const DICT_IDS = DICTS.map(d => d.id);
 function resultPrefs() {
@@ -581,13 +587,16 @@ function showEntry(id) {
 }
 
 function showRoots(rootIds, opt, q) {
-  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', force = '' } = opt;
+  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', arWord = '', force = '' } = opt;
   main.dataset.empty = '';
   lastLaneWord = laneWord;
+  lastArWord = norm(q || '');
   const pr = resultPrefs();
   const on = id => id === force || !pr.off.has(id);
   const extra = uniqParses(bwOnly).slice(0, 6);
+  const arKeys = arKeysFor(rootIds, [...laneOnly, arWord]);
   const has = { wikt: wikt.length, hw: rootIds.length, lexicon: extra.length, lane: laneOnly.length };
+  for (const id of AR_IDS) has[id] = arKeys[id].length;
   let h = '', rootsShown = false, hidden = false;
   pr.order.forEach((id, i) => {
     if (!has[id]) { /* nothing from this dictionary */ }
@@ -600,6 +609,7 @@ function showRoots(rootIds, opt, q) {
     }
     else if (id === 'lexicon') h += `<h2 class="sec">${rootsShown ? 'Also in lexicon' : 'Lexicon'}</h2>` + extra.map(bwCard).join('');
     else if (id === 'lane') h += `<h2 class="sec">Lane’s Lexicon</h2>` + laneOnly.map(lr => laneBlock(lr, true)).join('');
+    else if (AR_DICTS[id]) h += `<h2 class="sec">${AR_DICTS[id].name}</h2>` + arKeys[id].map((k, j) => arBlock(id, k, j === 0)).join('');
     // the word analysis sits after the first dictionary in your order, as it did after Wiktionary by default
     if (i === 0 && pr.parse && parses.length) h += `<h2 class="sec">Parsed</h2>` + uniqParses(parses).slice(0, 4).map(parseHtml).join('');
   });
@@ -607,6 +617,7 @@ function showRoots(rootIds, opt, q) {
   main.innerHTML = h || '<p class="muted">Nothing found.</p>';
   if (hasVocab()) markSaved(main);
   main.querySelectorAll('details.lane[open]').forEach(fillLane);
+  main.querySelectorAll('details.ard[open]').forEach(fillAr);
   const first = main.querySelector('.word.hit, .forms tr.hit');
   if (first) requestAnimationFrame(() => first.scrollIntoView({ block: 'center' }));
   else window.scrollTo(0, 0);
@@ -685,6 +696,73 @@ async function fillLane(d) {
     if (hasVocab()) markSaved(body);
     const hit = body.querySelector('.hit'); if (hit) hit.scrollIntoView({ block: 'center' });
   } catch (err) { body.textContent = 'Couldn’t load Lane’s entry. Check your connection and try again.'; delete d.dataset.filled; }
+}
+// ---------- Arabic–Arabic dictionaries (OpenITI texts, one file per first letter, loaded on demand) ----------
+const AR_DICTS = {
+  mufradat: { name: 'al-Mufradāt', full: 'al-Mufradāt fī gharīb al-Qur’ān', dir: 'data/mufradat/' },
+  mukhtar: { name: 'Mukhtār al-Ṣiḥāḥ', full: 'Mukhtār al-Ṣiḥāḥ', dir: 'data/mukhtar/' },
+};
+const AR_IDS = Object.keys(AR_DICTS);
+const arRoots = {}, arShards = new Map();
+let lastArWord = '';
+function arKey(id, n) {
+  const rs = arRoots[id]; if (!rs || !n) return null;
+  for (const v of rootVariants(n)) if (rs.has(v)) return v;
+  return null;
+}
+function arKeysFor(rootIds, more) {   // the roots each Arabic dictionary has for this search, in result order
+  const out = {};
+  for (const id of AR_IDS) {
+    const ks = [];
+    for (const n of [...rootIds.map(r => norm(byId.get(r)?.[1] || '')), ...more.map(m => norm(m).replace(/\s+/g, ''))]) {
+      const k = arKey(id, n); if (k && !ks.includes(k)) ks.push(k);
+    }
+    out[id] = ks;
+  }
+  return out;
+}
+const arHas = n => AR_IDS.some(id => arKey(id, n));
+function arShard(id, k) {
+  const name = AR_DICTS[id].dir + k.codePointAt(0).toString(16).padStart(4, '0') + '.json';
+  if (!arShards.has(name)) arShards.set(name, fetch(name).then(r => { if (!r.ok) throw new Error(name); return r.json(); })
+    .catch(err => { arShards.delete(name); throw err; }));
+  return arShards.get(name);
+}
+async function arEntry(id, ref) {   // "root:i" -> { head, html }
+  const at = ref.lastIndexOf(':'), k = ref.slice(0, at);
+  const html = (await arShard(id, k))[k][+ref.slice(at + 1)];
+  return { head: arHead(id, html, k), html };
+}
+// The word to save: al-Mufradāt's headword, or the first word Mukhtār explains (its heading is spaced root letters).
+function arHead(id, html, k) {
+  const bs = [...html.matchAll(/<b>(.*?)<\/b>/g)].map(m => m[1]);
+  return (id === 'mukhtar' ? bs[1] : bs[0]) || bs[0] || k;
+}
+function arBlock(id, k, open) {
+  return `<details class="ard" data-dict="${id}" data-root="${esc(k)}" ${open ? 'open' : ''}><summary>${AR_DICTS[id].name} <span class="muted">· <span lang="ar">${esc([...k].join(' '))}</span></span></summary><div class="ard-body muted">Loading…</div></details>`;
+}
+// The texts come escaped from the build, with only <b>, <q> and <br>. Each Arabic word becomes tappable,
+// and a headword matching the search (with or without ال) is marked.
+function arHtml(html) {
+  const want = lastArWord;
+  return html.replace(/<b>([^<]*)<\/b>/g, (m, w, at) => {
+    const n = norm(w).replace(/\s+/g, '');
+    return at > 0 && want && (n === want || n === 'ال' + want || 'ال' + n === want) ? `<b class="hit">${w}</b>` : m;
+  }).replace(/(^|>)([^<]+)/g, (m, a, t) => a + t.replace(/[\u0621-\u063A\u0641-\u064A\u064B-\u0652]+/g, w => `<span class="lk" data-q="${w}">${w}</span>`));
+}
+async function fillAr(d) {
+  if (d.dataset.filled) return; d.dataset.filled = '1';
+  const id = d.dataset.dict, k = d.dataset.root, body = d.querySelector('.ard-body');
+  try {
+    const items = (await arShard(id, k))[k] || [];
+    body.classList.remove('muted');
+    body.innerHTML = items.length ? items.map((html, i) => {
+      const head = arHead(id, html, k);
+      return `<div class="ard-entry">${SB({ s: id, r: k + ':' + i }, head)}<div class="ard-text" lang="ar" dir="rtl">${arHtml(html)}</div></div>`;
+    }).join('') + `<p class="ard-src muted">${AR_DICTS[id].full}, text from the <a href="https://openiti.org" target="_blank" rel="noopener">OpenITI</a> corpus (no vowel marks).</p>`
+      : '<p class="muted">No entries.</p>';
+    if (hasVocab()) markSaved(body);
+  } catch (err) { body.textContent = 'Couldn’t load this entry. Check your connection and try again.'; delete d.dataset.filled; }
 }
 function stripHead(e) { const d = e[2]; return d.startsWith(e[1]) ? d.slice(e[1].length).trim() : d; }
 function plain(s) { return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
@@ -1160,7 +1238,11 @@ main.addEventListener('click', e => {
   qEl.value = el.dataset.q; go({ q: el.dataset.q });
 });
 
-main.addEventListener('toggle', e => { if (e.target.matches?.('details.lane') && e.target.open) fillLane(e.target); }, true);
+main.addEventListener('toggle', e => {
+  if (!e.target.open) return;
+  if (e.target.matches?.('details.lane')) fillLane(e.target);
+  else if (e.target.matches?.('details.ard')) fillAr(e.target);
+}, true);
 document.getElementById('back')?.addEventListener('click', back);
 
 // Hardware keyboard: "/" or ⌘K/Ctrl+K focuses search; Esc steps out of study and folders.

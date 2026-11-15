@@ -202,6 +202,23 @@ details.lane .lane-body { padding: 0 0 4px; border-top: 1px solid var(--line); }
 .lane-entry table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; }
 .lane-entry td { padding: 2px 6px; }
 
+/* Arabic–Arabic dictionaries: right-to-left running text, each word tappable */
+details.ard { margin: 0; border-bottom: 1px solid var(--line); }
+details.ard > summary { cursor: pointer; display: flex; align-items: center; gap: 6px; min-height: 44px; padding-left: var(--gutter);
+  font: 600 13px var(--ui); color: var(--accent); }
+details.ard .ard-body { border-top: 1px solid var(--line); }
+.ard-entry { position: relative; padding: 8px 48px 10px var(--gutter); border-bottom: 1px solid var(--line); }
+.ard-entry:last-of-type { border-bottom: 0; }
+.ard-entry > .save-btn { position: absolute; top: 4px; right: 0; }
+.ard-text { font: 22px/1.9 var(--ar); text-align: right; overflow-wrap: anywhere; }
+.ard-text b { font-weight: 700; color: var(--accent); }
+.ard-text b.hit { background: var(--hl); border-radius: 2px; padding: 0 2px; }
+.ard-text q { quotes: "﴿" "﴾"; color: var(--ink); }
+.ard-text q::before, .ard-text q::after { color: var(--accent); }
+.ard-text .lk { cursor: pointer; }
+.ard-text .lk:hover { text-decoration: underline dotted var(--muted); text-underline-offset: 8px; }
+.ard-src { font: 12px var(--ui); padding: 6px var(--gutter) 10px; margin: 0; }
+
 @media (min-width: 640px) {
   .bw, .parse { display: grid; grid-template-columns: var(--hw-col) minmax(0, 1fr); column-gap: 16px; align-items: baseline; padding-left: var(--gutter); }
   .e-hw { display: flex; flex-direction: column; align-items: flex-start; }

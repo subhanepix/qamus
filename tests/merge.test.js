@@ -167,6 +167,14 @@ test('validateDoc accepts the spec document and emptyDoc', () => {
   assert.equal(M.validateDoc(M.emptyDoc()).ok, true);
 });
 
+test('validateDoc accepts cards saved from every dictionary, including the Arabic ones', () => {
+  for (const source of ['hw', 'wikt', 'lane', 'lexicon', 'mufradat', 'mukhtar', 'custom']) {
+    const d = JSON.parse(JSON.stringify(SPEC_DOC));
+    d.cards[0].source = source;
+    assert.equal(M.validateDoc(d).ok, true, source);
+  }
+});
+
 test('validateDoc rejects bad shapes', () => {
   const bad = (mut, re) => {
     const d = JSON.parse(JSON.stringify(SPEC_DOC));

@@ -112,7 +112,7 @@
   };
   const CARD_REQUIRED = ['id', 'folder', 'word', 'updatedAt'];
   const REVIEW_KEYS = ['due', 'interval', 'ease', 'reps', 'lapses', 'last', 'mark', 'updatedAt'];   // mark: browse label (1 got it, 2 again)
-  const SOURCES = ['hw', 'wikt', 'lane', 'lexicon', 'custom'];
+  const SOURCES = ['hw', 'wikt', 'lane', 'lexicon', 'mufradat', 'mukhtar', 'custom'];
 
   function checkField(kind, v) {
     switch (kind) {
