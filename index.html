@@ -28,6 +28,11 @@
     <button id="clear" class="icon-btn" aria-label="Clear" hidden>×</button>
     <ul id="suggest" class="suggest" role="listbox" hidden></ul>
     </div>
+    <nav id="tabs" class="tabs" aria-label="Sections" hidden>
+      <button type="button" class="tab" data-tab="search" aria-label="Search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>Search</span></button>
+      <button type="button" class="tab" data-tab="vocab" aria-label="Vocab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a.5.5 0 0 1 .5.5v16.2a.3.3 0 0 1-.48.24L12 16l-6.02 4.44a.3.3 0 0 1-.48-.24V4a.5.5 0 0 1 .5-.5z"/></svg><span>Vocab</span><span class="tab-badge" hidden></span></button>
+      <button type="button" class="tab" data-tab="history" aria-label="History"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>History</span></button>
+    </nav>
     <button id="acct" class="acct" type="button" aria-label="Account" hidden>
       <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
       <span class="acct-name"></span><span class="dot local"></span>

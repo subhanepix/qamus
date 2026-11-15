@@ -389,3 +389,44 @@ select.inp { -webkit-appearance: none; appearance: none; padding-right: 32px; cu
   .st-face { padding: 20px 16px; min-height: 300px; }
 }
 @media (prefers-reduced-motion: reduce) { .st-card { transition: none; } }
+
+/* ---------- tabs: Search · Vocab · History ---------- */
+.tabs { display: flex; }
+.tab { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; min-width: 44px;
+  border: 0; background: none; color: var(--muted); font: 600 14px system-ui, sans-serif; cursor: pointer; border-radius: 9px; padding: 0 12px; }
+.tab svg { width: 22px; height: 22px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.tab[aria-current="page"] { color: var(--accent); }
+.tab[aria-current="page"] svg { stroke-width: 2.2; }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tab-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--bg);
+  font: 700 11px/18px system-ui, sans-serif; text-align: center; font-variant-numeric: tabular-nums; }
+@media (max-width: 699px) {
+  .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 15; justify-content: space-around; gap: 4px;
+    border-top: 1px solid var(--line); background: var(--bg); background: color-mix(in srgb, var(--bg) 90%, transparent);
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    padding: 4px max(8px, env(safe-area-inset-right, 0px)) max(4px, env(safe-area-inset-bottom, 0px)) max(8px, env(safe-area-inset-left, 0px)); }
+  .tab { flex: 1 1 0; flex-direction: column; gap: 2px; min-height: 52px; font-size: 11px; padding: 4px 0; }
+  .tab .tab-badge { position: absolute; top: 2px; left: calc(50% + 6px); }
+  body.has-tabs main { padding-bottom: calc(48px + 61px + env(safe-area-inset-bottom, 0px)); }
+  body.has-tabs .select-bar { bottom: calc(61px + env(safe-area-inset-bottom, 0px)); }
+  body.studying .tabs { display: none; }
+  body.studying main { padding-bottom: 48px; }
+}
+@media (min-width: 700px) {
+  .tabs { flex: none; gap: 2px; padding: 2px; height: 50px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  .tab { height: 44px; }
+  .tab[aria-current="page"] { background: var(--accent-soft); }
+}
+@media (min-width: 700px) and (max-width: 860px) {
+  .tab span:not(.tab-badge) { display: none; }   /* icon-only on iPad portrait so the search field keeps its room */
+  .tab { padding: 0 10px; }
+}
+
+/* ---------- update notice ---------- */
+.update-banner { position: fixed; z-index: 40; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 8px; width: max-content; max-width: calc(100% - 32px); padding: 8px 8px 8px 16px;
+  background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
+  font: 15px system-ui, sans-serif; }
+.update-banner span { flex: 1; min-width: 0; }
+.ub-x { width: 44px; height: 44px; border: 0; background: none; color: var(--muted); font-size: 24px; cursor: pointer; border-radius: 10px; }
+@media (max-width: 699px) { body.has-tabs:not(.studying) .update-banner { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); } }

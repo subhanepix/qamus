@@ -152,8 +152,10 @@ function pick(r) {
 // In the Claude preview the hash can't carry state, so keep a small in-page history instead.
 const MEM = !!window.QAMUS_MEMORY_ROUTER;
 let memStack = [], memCur = '';
+let navDepth = 0;   // in-app navigations so far; tells #account whether "back" stays inside the app
 function go(params) {   // params: object of hash params, or a bare route name like 'history'
   const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
+  navDepth++;
   if (MEM) { if (memCur && memCur !== h) memStack.push(memCur); memCur = h; return route(); }
   if (location.hash === '#' + h) route(); else location.hash = '#' + h;
 }
@@ -163,9 +165,15 @@ function route() {
   const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
   const bk = document.getElementById('back'); if (bk) bk.hidden = !memCur;
   const q = p.get('q') || '';
+  const name = routeName(p);
   if (q && qEl.value !== q && document.activeElement !== qEl) qEl.value = q;
+  if (!q && name !== 'account' && document.activeElement !== qEl) qEl.value = '';   // no stale lookup on other screens
   $('#clear').hidden = !qEl.value;
+  setTab(name);
+  document.title = pageTitle(name, p);
+  document.body.classList.toggle('studying', name === 'study');
   if (!p.has('history')) histConfirm = false;
+  if (name === 'account') return accountRoute();
   if (p.has('history') && Store) return historyView();
   if (p.has('vocab') && hasVocab()) return vocabView();
   if (p.get('folder') && hasVocab()) return folderView(p.get('folder'));
@@ -180,6 +188,78 @@ function route() {
   if (q) recordSearch(q);   // a result view is on screen: record it (never on keystrokes)
 }
 
+function routeName(p) {
+  if (p.has('history')) return 'history';
+  if (p.has('vocab')) return 'vocab';
+  if (p.get('folder')) return 'folder';
+  if (p.get('study')) return 'study';
+  if (p.has('account')) return 'account';
+  if (p.get('q') || p.get('e') || p.get('f') || p.get('w')) return 'result';
+  return 'home';
+}
+function pageTitle(name, p) {
+  const fname = id => (typeof folderById === 'function' && Store ? folderById(id)?.name : '') || '';
+  const ids = (p.get('study') || '').split(',').filter(Boolean);
+  const t = {
+    result: p.get('q') || '',
+    vocab: 'Vocab', history: 'History', account: 'Account',
+    folder: fname(p.get('folder')),
+    study: 'Study · ' + (ids.length > 1 ? `${ids.length} folders` : fname(ids[0])),
+  }[name];
+  return t ? `${t} · Qamus` : 'Qamus';
+}
+
+// ---------- tabs: Search · Vocab · History ----------
+const tabsEl = $('#tabs');
+const TAB_OF = { home: 'search', result: 'search', account: null, vocab: 'vocab', folder: 'vocab', study: 'vocab', history: 'history' };
+function setTab(name) {
+  if (!tabsEl) return;
+  const on = hasVocab();
+  tabsEl.hidden = !on;
+  document.body.classList.toggle('has-tabs', on);
+  if (!on) return;
+  const active = TAB_OF[name];
+  if (active !== null) for (const b of tabsEl.querySelectorAll('[data-tab]')) {
+    if (b.dataset.tab === active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+  }
+  updateTabBadge();
+}
+function updateTabBadge() {
+  if (!tabsEl || !hasVocab()) return;
+  const n = dueCount(liveCards());
+  const badge = tabsEl.querySelector('.tab-badge'), tab = badge.closest('.tab');
+  badge.hidden = !n;
+  badge.textContent = n > 99 ? '99+' : String(n);
+  tab.setAttribute('aria-label', n ? `Vocab, ${n} due` : 'Vocab');
+}
+tabsEl?.addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]');
+  if (!b) return;
+  const t = b.dataset.tab;
+  if (t !== 'search') return go(t);
+  if (view === 'home') { qEl.focus(); qEl.select(); }
+  else { qEl.value = ''; go(''); }
+});
+
+// ---------- #account: the account sheet as a route ----------
+let accountOpen = false;
+function accountRoute() {
+  if (!SYNC_URL || !Sync) return home();   // local-only mode has no login UI
+  if (!view || view === 'loading') home();
+  if (accountOpen) return;
+  accountOpen = true;
+  accountSheet({ onClose: leaveAccount });
+}
+function leaveAccount() {
+  accountOpen = false;
+  const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
+  if (!p.has('account')) return;           // the sheet closed because we navigated elsewhere
+  if (MEM) return back();
+  if (navDepth > 0) return history.back();
+  history.replaceState(null, '', location.pathname + location.search);   // deep link: don't leave a dead entry
+  route();
+}
+
 // ---------- views ----------
 const qAttr = q => isAr(q) ? 'lang="ar"' : 'dir="auto"';
 function home() {
@@ -187,7 +267,7 @@ function home() {
   const h = liveHistory().slice(0, HIST_HOME);
   main.innerHTML = `<div class="empty muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
     <p style="font-size:14px">Hamzas, harakat, ة/ه and ى/ي don’t matter. Prefixes and suffixes are stripped automatically.</p></div>
-    ${hasVocab() ? vocabLink() : ''}
+    ${hasVocab() && dueCount(liveCards()) ? vocabLink() : ''}
     ${h.length ? `<div class="sec-row"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
     <div class="history">${h.map(({ q }) => `<button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>` : ''}`;
 }
@@ -691,8 +771,9 @@ function renderAcct(st) {
   acctEl.dataset.status = st.user ? st.status : 'local';
 }
 
-function loginSheet() {
+function loginSheet({ onClose } = {}) {
   sheet({
+    onClose,
     title: 'Choose a username to sync across devices',
     body: `<p class="muted sheet-note">No password: the username is the key, so pick something hard to guess and use the same one on your other devices.</p>
       <label class="lbl" for="lg-name">Username</label>
@@ -752,9 +833,9 @@ function loginSheet() {
   });
 }
 
-function accountSheet() {
+function accountSheet({ onClose } = {}) {
   const st = Sync.state;
-  if (!st.user) return loginSheet();
+  if (!st.user) return loginSheet({ onClose });
   let off = null;
   sheet({
     title: 'Account',
@@ -762,7 +843,6 @@ function accountSheet() {
       <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
       <div class="actions" id="ac-main">
         <button type="button" class="btn primary" id="ac-sync">Sync now</button>
-        <button type="button" class="btn" id="ac-vocab">Vocab</button>
         <button type="button" class="btn" id="ac-hist">Search history</button>
         <button type="button" class="btn quiet" id="ac-out">Sign out</button>
       </div>
@@ -800,14 +880,12 @@ function accountSheet() {
           force = true;
           return ask('<b>Your latest changes couldn’t be synced.</b> Removing the data now will lose them. Keep it on this device instead, or remove it anyway?', 'Remove anyway');
         }
-        api.close();
-        route();
+        api.close();   // the Store 'change' from clearing data redraws the view
       };
       p.addEventListener('click', e => {
         const id = e.target.closest('button')?.id;
         if (id === 'ac-sync') Sync.syncNow();
-        else if (id === 'ac-hist') { api.close(); go('history'); }
-        else if (id === 'ac-vocab') { api.close(); go('vocab'); }
+        else if (id === 'ac-hist') { go('history'); api.close(); }
         else if (id === 'ac-out') {
           const s = Sync.state;
           ask((s.dirty ? '<b>Some changes on this device haven’t synced yet</b>; they’ll be sent first. ' : '') +
@@ -818,7 +896,7 @@ function accountSheet() {
         else if (id === 'ac-keep') out(true);
       });
     },
-    onClose() { off?.(); },
+    onClose() { off?.(); onClose?.(); },
   });
 }
 
@@ -832,6 +910,7 @@ function initSync() {
       else if (view === 'vocab' || view === 'folder') route();
       // 'study' renders itself; a store change must not flip the card back mid-session
       else if (view === 'result' && hasVocab()) markSaved(main);
+      updateTabBadge();
     };
     Store.on('change', refresh);
     refresh();
@@ -840,16 +919,16 @@ function initSync() {
     Sync.init({ url: SYNC_URL });
     renderAcct(Sync.state);
     acctEl.hidden = false;
-    acctEl.addEventListener('click', accountSheet);
+    acctEl.addEventListener('click', () => go('account'));
     if (!Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet();
   });
 }
 
 // ---------- events ----------
-let t;
-qEl.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderSuggest, 60); });
-qEl.addEventListener('focus', renderSuggest);
-qEl.addEventListener('blur', () => setTimeout(() => { sug.hidden = true; }, 150));
+let t, blurT;
+qEl.addEventListener('input', () => { clearTimeout(blurT); clearTimeout(t); t = setTimeout(renderSuggest, 60); });
+qEl.addEventListener('focus', () => { clearTimeout(blurT); renderSuggest(); });   // a pending blur-hide must not hide a fresh list
+qEl.addEventListener('blur', () => { clearTimeout(blurT); blurT = setTimeout(() => { sug.hidden = true; }, 150); });
 qEl.addEventListener('keydown', e => {
   const lis = sug.querySelectorAll('li');
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -873,6 +952,36 @@ main.addEventListener('click', e => {
 
 main.addEventListener('toggle', e => { if (e.target.matches?.('details.lane') && e.target.open) fillLane(e.target); }, true);
 document.getElementById('back')?.addEventListener('click', back);
-if (!MEM && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// Hardware keyboard: "/" or ⌘K/Ctrl+K focuses search; Esc steps out of study and folders.
+// (Sheets handle their own Esc in the capture phase and call preventDefault, so they win.)
+document.addEventListener('keydown', e => {
+  if (openSheet || e.defaultPrevented) return;
+  const typing = e.target.matches?.('input, textarea, select, [contenteditable="true"]');
+  if ((e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
+    e.preventDefault(); qEl.focus(); qEl.select(); return;
+  }
+  if (e.key !== 'Escape' || typing) return;
+  if (view === 'study' && typeof backHash === 'function' && ss) go(backHash());
+  else if (view === 'folder') go('vocab');
+});
+
+// Service worker. A new version takes over in the background (skipWaiting + clients.claim);
+// tell the user instead of reloading under them.
+const hadSW = !MEM && 'serviceWorker' in navigator && !!navigator.serviceWorker.controller;
+function onSWUpdate() {
+  if (document.getElementById('update-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'update-banner'; b.className = 'update-banner'; b.setAttribute('role', 'status');
+  b.innerHTML = `<span>Qamus was updated.</span><button type="button" class="btn primary" id="ub-reload">Reload</button>
+    <button type="button" class="ub-x" aria-label="Dismiss update notice">×</button>`;
+  b.querySelector('#ub-reload').addEventListener('click', () => location.reload());
+  b.querySelector('.ub-x').addEventListener('click', () => b.remove());
+  document.body.appendChild(b);
+}
+if (!MEM && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadSW) onSWUpdate(); });
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 load().catch(err => { main.innerHTML = `<p>Couldn’t load the dictionary data (${esc(String(err.message || err))}).</p>`; });
 initSync();

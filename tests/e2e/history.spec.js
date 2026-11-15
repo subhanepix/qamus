@@ -52,7 +52,6 @@ test.describe('local history', () => {
     expect(await live(page)).toEqual([]);
     await q.press('Enter');
     await expect.poll(() => live(page)).toEqual(['مدرسة']);
-    await page.waitForTimeout(200);   // Enter blurs the field; its 150 ms hide-suggestions timer must fire first
 
     await q.fill('');
     await q.fill('قلم');
