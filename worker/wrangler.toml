@@ -6,8 +6,8 @@ compatibility_date = "2026-10-01"
 # Local `wrangler dev` uses a simulated KV and ignores this id.
 [[kv_namespaces]]
 binding = "QAMUS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "0935be5a50ed43f5981630d0a8d5ef83"
 
 [vars]
 # The GitHub Pages origin of the site (scheme + host, no path, no trailing slash).
-ALLOWED_ORIGIN = "https://YOUR-GITHUB-USERNAME.github.io"
+ALLOWED_ORIGIN = "https://subhanepix.github.io"

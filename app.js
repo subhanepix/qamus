@@ -22,7 +22,7 @@ const lsGet = k => { try { return localStorage.getItem(k); } catch { return null
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 // The sync Worker's URL. Empty = local-only mode (no login UI). The localStorage key
 // `qamus.syncUrl` overrides it for local dev and tests (e.g. http://localhost:8787).
-const SYNC_URL = lsGet('qamus.syncUrl') ?? '';
+const SYNC_URL = lsGet('qamus.syncUrl') ?? 'https://qamus-sync.subhansajid360.workers.dev';
 const Store = window.QamusStore, Sync = window.QamusSync;
 
 async function load() {

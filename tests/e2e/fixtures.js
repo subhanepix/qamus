@@ -19,6 +19,8 @@ const NOISE = /Failed to load resource|net::ERR_/;
 function guard(page, errors) {
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !NOISE.test(m.text())) errors.push('console: ' + m.text()); });
+  // Tests must never reach the deployed Worker.
+  page.on('request', r => { if (/workers\.dev/.test(r.url())) errors.push('production request: ' + r.url()); });
   page.on('response', r => {
     if (r.url().startsWith(SITE) && r.status() >= 400) errors.push(`HTTP ${r.status()} ${r.url()}`);
   });
@@ -30,7 +32,7 @@ const test = base.test.extend({
   user: async ({}, use) => { await use(randUser()); },
   errors: async ({}, use) => { await use([]); },
   context: async ({ context, syncUrl }, use) => {
-    if (syncUrl) await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl);
+    await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl || '');
     await use(context);
   },
   page: async ({ page, errors }, use) => {
@@ -43,7 +45,7 @@ const test = base.test.extend({
 // A second, independent "device" with the same guards.
 async function newDevice(browser, { syncUrl = SYNC } = {}) {
   const context = await browser.newContext();
-  if (syncUrl) await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl);
+  await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl || '');
   const page = await context.newPage();
   const errors = [];
   guard(page, errors);

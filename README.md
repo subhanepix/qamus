@@ -61,11 +61,11 @@ Two dev servers are defined in `.claude/launch.json`:
 node tests/serve.js 8000          # the site: http://127.0.0.1:8000
 npm --prefix worker run dev       # the Worker with a simulated KV: http://localhost:8787
 ```
-To try sync against the local Worker, run this in the browser console, then reload:
+`SYNC_URL` points at the live Worker, which accepts requests from `localhost` too, so a local copy syncs your real data unless you override it. To use the local Worker instead, run this in the browser console, then reload:
 ```js
 localStorage.setItem('qamus.syncUrl', 'http://localhost:8787')
 ```
-The `localStorage` override takes priority over `SYNC_URL`. Set it to `''` to force local-only mode.
+The `localStorage` override takes priority over `SYNC_URL`. Set it to `''` to force local-only mode. The tests always set it (to the test Worker, or to `''`), and fail if anything contacts `workers.dev`.
 
 ## Tests
 
