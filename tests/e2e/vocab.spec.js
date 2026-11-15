@@ -29,18 +29,22 @@ const INBOX = { id: 'f_inbox', name: 'Inbox' };
 test.describe('local vocab', () => {
   test.use({ syncUrl: false });
 
-  test('every dictionary row type has a bookmark that pre-fills the save sheet', async ({ page }) => {
+  test('every dictionary row type has a bookmark; picking a folder saves it with the row\'s meaning', async ({ page }) => {
     await boot(page); await dataReady(page);
     const check = async (btn, word) => {
+      const before = (await cards(page)).length;
       await btn.click();
-      await expect(sheet(page).locator('.cf-word')).toBeVisible();
-      if (word) await expect(sheet(page).locator('.cf-word')).toHaveText(word);
-      const g = await sheet(page).locator('#cf-gloss').inputValue();
+      await expect(sheet(page).locator('.pick-word [lang=ar]')).toBeVisible();
+      if (word) await expect(sheet(page).locator('.pick-word [lang=ar]')).toHaveText(word);
+      await sheet(page).getByRole('button', { name: 'Save to Inbox' }).click();
+      await expect(sheet(page)).toHaveCount(0);
+      const cs = await cards(page);
+      expect(cs).toHaveLength(before + 1);
+      const g = cs[cs.length - 1].gloss;
       expect(g.length).toBeGreaterThan(0);
       expect(g.length).toBeLessThanOrEqual(121);
       expect(g).not.toMatch(/[<>]/);
-      await page.keyboard.press('Escape');
-      await expect(sheet(page)).toHaveCount(0);
+      await expect(btn).toHaveAttribute('aria-pressed', 'true');
     };
     await lookup(page, 'كتاب');
     await check(hitSave(page));                                              // HW word row
@@ -56,16 +60,18 @@ test.describe('local vocab', () => {
     await check(lane.locator('.lane-entry > .save-btn').nth(1));              // Lane entry
   });
 
-  test('save a word to Inbox: bookmark fills, Vocab lists it, survives reload', async ({ page }) => {
+  test('save a word in two taps: bookmark, then a folder; toast confirms; Vocab lists it after reload', async ({ page }) => {
     await boot(page); await dataReady(page);
     await lookup(page, 'كتاب');
     const btn = hitSave(page);
     await expect(btn).toHaveAttribute('aria-pressed', 'false');
     await btn.click();
-    await expect(sheet(page).locator('#cf-folder')).toHaveValue('f_inbox');
-    await expect(sheet(page).locator('#cf-gloss')).toHaveValue(/^piece of writing/);   // "pl. كتب kutub" stripped
-    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sheet(page).locator('.sheet-head h2')).toHaveText('Save to folder');
+    await expect(sheet(page).locator('#sp-gloss')).toHaveText(/^piece of writing/);   // "pl. كتب kutub" stripped
+    await expect(sheet(page).getByRole('button', { name: 'Save to Inbox' })).toBeFocused();   // last-used (default) folder
+    await sheet(page).getByRole('button', { name: 'Save to Inbox' }).click();
     await expect(sheet(page)).toHaveCount(0);
+    await expect(page.locator('#toast')).toContainText('Saved to Inbox');
     await expect(btn).toHaveAttribute('aria-pressed', 'true');
     const [c] = await cards(page);
     expect(c).toMatchObject({ word: 'كتاب', key: 'كتاب', root: 'ك ت ب', source: 'hw', folder: 'f_inbox', translit: 'kitāb' });
@@ -78,43 +84,64 @@ test.describe('local vocab', () => {
     await expect(page.locator('.folder-row')).toContainText('1 card');
   });
 
-  test('new folder from the save sheet; last-used folder is pre-selected next time', async ({ page }) => {
+  test('new folder from the picker saves into it; that folder is focused next time; Edit opens the full form', async ({ page }) => {
     await boot(page); await dataReady(page);
     await lookup(page, 'مدرسة');
     await hitSave(page).click();
     await sheet(page).getByRole('button', { name: 'New folder' }).click();
-    await sheet(page).locator('#cf-newf-name').fill('دع الأيام');
-    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sheet(page).locator('#sp-newf-name')).toBeFocused();
+    await sheet(page).getByRole('button', { name: 'Create and save' }).click();
+    await expect(sheet(page).locator('#sp-msg')).toHaveText('Enter a name.');
+    await sheet(page).locator('#sp-newf-name').fill('دع الأيام');
+    await page.keyboard.press('Enter');
     await expect(sheet(page)).toHaveCount(0);
+    await expect(page.locator('#toast')).toContainText('Saved to دع الأيام');
     const folder = await page.evaluate(() => QamusStore.doc.folders.find(f => f.name === 'دع الأيام'));
     expect(folder).toBeTruthy();
     expect((await cards(page))[0].folder).toBe(folder.id);
 
+    await page.locator('#toast').getByRole('button', { name: 'Edit' }).click();
+    await expect(sheet(page).locator('.sheet-head h2')).toHaveText('Edit card');
+    await sheet(page).locator('#cf-note').fill('from the poem');
+    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sheet(page)).toHaveCount(0);
+    expect((await cards(page))[0].note).toBe('from the poem');
+
     await lookup(page, 'قلم');
     await hitSave(page).click();
-    await expect(sheet(page).locator('#cf-folder')).toHaveValue(folder.id);
+    await expect(sheet(page).getByRole('button', { name: 'Save to دع الأيام' })).toBeFocused();
   });
 
-  test('second tap shows where it is saved and removes it; duplicate guard warns', async ({ page }) => {
+  test('a ticked folder means saved there: tapping it removes, Undo restores; a word can live in two folders', async ({ page }) => {
     await boot(page); await dataReady(page);
+    await seed(page, { folders: [INBOX, { id: 'f_b', name: 'Poem' }] });
     await lookup(page, 'كتاب');
     const btn = hitSave(page);
     await btn.click();
-    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
-    await btn.click();   // second tap
-    await expect(sheet(page).locator('.saved-list')).toContainText('In Inbox');
-    await sheet(page).getByRole('button', { name: 'Save to another folder' }).click();
-    await expect(sheet(page).locator('#cf-msg')).toContainText('Already in Inbox');
-    await expect(sheet(page).getByRole('button', { name: 'Save anyway' })).toBeVisible();
-    await page.keyboard.press('Escape');
+    await sheet(page).getByRole('button', { name: 'Save to Inbox' }).click();
+    await btn.click();   // second tap: the same picker, Inbox ticked
+    const inbox = sheet(page).getByRole('button', { name: 'Remove from Inbox' });
+    await expect(inbox).toHaveAttribute('aria-pressed', 'true');
+    await expect(inbox).toContainText('Saved');
+    await sheet(page).getByRole('button', { name: 'Save to Poem' }).click();
+    expect((await cards(page)).map(c => c.folder).sort()).toEqual(['f_b', 'f_inbox']);
 
     await btn.click();
     await sheet(page).getByRole('button', { name: 'Remove from Inbox' }).click();
     await expect(sheet(page)).toHaveCount(0);
+    await expect(page.locator('#toast')).toContainText('Removed from Inbox');
+    expect((await cards(page)).map(c => c.folder)).toEqual(['f_b']);
+    await expect(btn).toHaveAttribute('aria-pressed', 'true');   // still in Poem
+    await page.locator('#toast').getByRole('button', { name: 'Undo' }).click();
+    expect((await cards(page)).map(c => c.folder).sort()).toEqual(['f_b', 'f_inbox']);
+    const restored = (await cards(page)).find(c => c.folder === 'f_inbox');
+    expect(restored).toMatchObject({ word: 'كتاب', root: 'ك ت ب', source: 'hw' });
+
+    await btn.click();
+    await sheet(page).getByRole('button', { name: 'Remove from Inbox' }).click();
+    await btn.click();
+    await sheet(page).getByRole('button', { name: 'Remove from Poem' }).click();
     await expect(btn).toHaveAttribute('aria-pressed', 'false');
-    const all = await page.evaluate(() => QamusStore.doc.cards);
-    expect(all).toHaveLength(1);
-    expect(all[0].deleted).toBe(true);
   });
 
   test('folders: create, nest, rename, move (not into a descendant), delete both ways', async ({ page }) => {
@@ -287,7 +314,7 @@ test.describe('local vocab', () => {
     await expect(page.locator('.card-row')).toHaveCount(5);
   });
 
-  test('vocab screens and the save sheet fit 400px in both themes', async ({ page }) => {
+  test('vocab screens and the save-to-folder picker fit 400px in both themes', async ({ page }) => {
     for (const scheme of ['light', 'dark']) {
       await page.setViewportSize({ width: 400, height: 800 });
       await page.emulateMedia({ colorScheme: scheme });
@@ -326,7 +353,7 @@ test.describe('synced vocab', () => {
     await device(page, user);
     await lookup(page, 'كتاب');
     await hitSave(page).click();
-    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await sheet(page).getByRole('button', { name: 'Save to Inbox' }).click();
     await page.evaluate(() => QamusSync.syncNow());
 
     const B = await newDevice(browser);
@@ -345,7 +372,7 @@ test.describe('synced vocab', () => {
     await lookup(page, 'كتاب');
     await context.setOffline(true);
     await hitSave(page).click();
-    await sheet(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await sheet(page).getByRole('button', { name: 'Save to Inbox' }).click();
     await expect(hitSave(page)).toHaveAttribute('aria-pressed', 'true');
     await page.evaluate(() => QamusSync.syncNow());
     await expect(page.locator('#acct')).toHaveAttribute('data-status', 'offline');

@@ -274,11 +274,76 @@ async function prefill(p) {
 }
 async function onSaveClick(btn) {
   let p; try { p = JSON.parse(btn.dataset.save); } catch { return; }
-  const word = btn.dataset.word;
-  if (savedIndex().has(p.s + '|' + p.r)) return savedSheet(p, word);
-  let fields;
-  try { fields = await prefill(p); } catch { fields = { word, source: p.s, ref: String(p.r ?? '') }; }
-  cardSheet({ mode: 'save', fields });
+  saveToSheet(p, btn.dataset.word);
+}
+
+// "Save to folder": one tap on a folder saves the word there (or removes it, if it's already there).
+// The meaning, root and transliteration come from the dictionary row; Edit in the toast opens the full form.
+function saveToSheet(payload, word) {
+  const key = payload.s + '|' + payload.r;
+  const fieldsP = prefill(payload).catch(() => ({ word, source: payload.s, ref: String(payload.r ?? '') }));
+  const savedHere = id => (savedIndex().get(key) || []).filter(c => cardFolder(c) === id);
+  const rows = tree();
+  if (!rows.some(({ f }) => f.id === INBOX)) rows.unshift({ f: VIRTUAL_INBOX, depth: 0 });
+  const last = lastFolder();
+  const rowHtml = ({ f, depth }) => {
+    const on = savedHere(f.id).length > 0, n = cardsIn(f.id).length;
+    return `<li><button type="button" class="pick-row" data-folder="${esc(f.id)}" aria-pressed="${on}" style="--depth:${depth}"
+      aria-label="${on ? 'Remove from' : 'Save to'} ${esc(folderPath(f.id))}" ${f.id === last && !on ? 'autofocus' : ''}>
+      <span class="pick-name" dir="auto">${esc(f.name)}</span><span class="pick-n">${on ? 'Saved' : plural(n, 'card')}</span>
+      <span class="pick-check" aria-hidden="true"></span></button></li>`;
+  };
+  sheet({
+    title: 'Save to folder',
+    body: `<p class="pick-word"><span lang="ar">${esc(word)}</span><span class="pick-gloss muted" id="sp-gloss"></span></p>
+      <button type="button" class="pick-new" id="sp-new"><span class="pick-plus" aria-hidden="true">+</span>New folder</button>
+      <form class="pick-newf" id="sp-newf" novalidate hidden>
+        <input id="sp-newf-name" class="inp" dir="auto" maxlength="100" placeholder="Folder name" aria-label="New folder name" enterkeyhint="done">
+        <button type="submit" class="btn primary">Create and save</button>
+        <p class="form-msg" id="sp-msg" role="status"></p></form>
+      <ul class="pick-list">${rows.map(rowHtml).join('')}</ul>`,
+    onMount(p, api) {
+      fieldsP.then(f => { const g = p.querySelector('#sp-gloss'); if (g) g.textContent = f.gloss || ''; });
+      const saveInto = async (folder, newName) => {
+        const fields = await fieldsP;
+        const id = addCard(fields, folder, newName);
+        const at = cardFolder(liveCards().find(c => c.id === id) || { folder });
+        api.close();
+        toast(`Saved to <b>${esc(folderPath(at))}</b>`, { label: 'Edit', run: () => { const c = liveCards().find(x => x.id === id); if (c) cardSheet({ mode: 'edit', card: c }); } });
+      };
+      p.querySelector('.pick-list').addEventListener('click', e => {
+        const row = e.target.closest('.pick-row');
+        if (!row) return;
+        const id = row.dataset.folder, here = savedHere(id);
+        if (!here.length) return saveInto(id);
+        const snap = here.map(c => ({ ...c }));
+        deleteCards(here.map(c => c.id));
+        api.close();
+        toast(`Removed from <b>${esc(folderPath(id))}</b>`, { label: 'Undo', run: () => snap.forEach(c => addCard(c, id)) });
+      });
+      const form = p.querySelector('#sp-newf'), name = p.querySelector('#sp-newf-name');
+      p.querySelector('#sp-new').addEventListener('click', e => { e.currentTarget.hidden = true; form.hidden = false; name.focus(); });
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        const n = name.value.trim();
+        if (!n) { const m = p.querySelector('#sp-msg'); m.textContent = 'Enter a name.'; m.classList.add('err'); name.focus(); return; }
+        saveInto(null, n);
+      });
+    },
+  });
+}
+
+// A short notice at the bottom of the screen, with one action (Edit, Undo).
+let toastT = 0;
+function toast(html, action) {
+  document.getElementById('toast')?.remove();
+  clearTimeout(toastT);
+  const t = document.createElement('div');
+  t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status');
+  t.innerHTML = `<span class="toast-msg">${html}</span>${action ? `<button type="button" class="toast-act">${esc(action.label)}</button>` : ''}`;
+  if (action) t.querySelector('.toast-act').addEventListener('click', () => { clearTimeout(toastT); t.remove(); action.run(); });
+  document.body.appendChild(t);
+  toastT = setTimeout(() => t.remove(), 6000);
 }
 function openCard(c) {   // the card's dictionary entry, else a normal search
   const r = c.ref || '';
@@ -391,40 +456,6 @@ function cardSheet({ mode, fields = {}, card = null, folder = null }) {
         api.close();
       });
       checkDup();
-    },
-  });
-}
-
-function savedSheet(payload, word) {
-  const key = payload.s + '|' + payload.r;
-  sheet({
-    title: 'Saved',
-    body: `<p class="cf-word" lang="ar">${esc(word)}</p><ul class="saved-list" id="sv-list"></ul>
-      <div class="actions"><button type="button" class="btn primary" id="sv-another">Save to another folder</button>
-      <button type="button" class="btn quiet" id="sv-done">Done</button></div>`,
-    onMount(p, api) {
-      const list = p.querySelector('#sv-list');
-      const render = () => {
-        const cards = savedIndex().get(key) || [];
-        if (!cards.length) { api.close(); return; }
-        list.innerHTML = cards.map(c => `<li><span>In <b>${esc(folderPath(cardFolder(c)))}</b></span>
-          <button type="button" class="btn" data-unsave="${esc(c.id)}" aria-label="Remove from ${esc(folderPath(cardFolder(c)))}">Remove</button></li>`).join('');
-      };
-      render();
-      list.addEventListener('click', e => {
-        const b = e.target.closest('[data-unsave]');
-        if (!b) return;
-        deleteCards([b.dataset.unsave]);
-        render();
-        p.querySelector('[data-unsave], #sv-another')?.focus();
-      });
-      p.querySelector('#sv-done').addEventListener('click', () => api.close());
-      p.querySelector('#sv-another').addEventListener('click', async () => {
-        api.close();
-        let fields;
-        try { fields = await prefill(payload); } catch { fields = { word, source: payload.s, ref: String(payload.r) }; }
-        cardSheet({ mode: 'save', fields });
-      });
     },
   });
 }
