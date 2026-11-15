@@ -208,6 +208,20 @@ test.describe('navigation (local)', () => {
     await expect(back).toBeHidden();
     expect(await page.evaluate(() => location.hash)).toBe('');
   });
+
+  test('home greets: first visit, then "Welcome back" with the last lookup', async ({ page }) => {
+    await boot(page);
+    const w = page.locator('main .welcome');
+    await expect(w.locator('.wb-title')).toHaveText('Welcome to Qamus');
+    await expect(w.locator('.wb-sub')).toHaveText(/^Good (morning|afternoon|evening)\. Look up a word to get started\.$/);
+    await page.evaluate(() => go({ q: 'كتاب' }));
+    await expect(page.locator('main details.root').first()).toBeVisible();
+    await tab(page, 'search').click();
+    await expect(w.locator('.wb-title')).toHaveText('Welcome back');
+    await expect(w.locator('.wb-sub')).toContainText('You last looked up كتاب just now.');
+    await expect(w.locator('.wb-name')).toHaveCount(0);
+    await expect(page.locator('main .empty')).toBeVisible();
+  });
 });
 
 test.describe('navigation (synced)', () => {
@@ -246,5 +260,14 @@ test.describe('navigation (synced)', () => {
     expect(await page.evaluate(() => location.hash)).toBe('');
     expect(await page.evaluate(() => history.length)).toBe(before);
     await expect(page.locator('main .empty')).toBeVisible();
+  });
+
+  test('home says "Welcome back, <username>" once signed in, and drops the name on sign-out', async ({ page, user }) => {
+    await device(page, user);
+    await expect(page.locator('main .wb-title')).toHaveText(`Welcome back, ${user}`);
+    await expect(page.locator('main .wb-name')).toHaveText(user);
+    await page.evaluate(() => QamusSync.signOut({ force: true }));
+    await expect(page.locator('main .wb-name')).toHaveCount(0);
+    await expect(page.locator('main .wb-title')).not.toContainText(user);
   });
 });

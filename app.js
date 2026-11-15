@@ -262,10 +262,26 @@ function leaveAccount() {
 
 // ---------- views ----------
 const qAttr = q => isAr(q) ? 'lang="ar"' : 'dir="auto"';
+// Home greeting: "Welcome back, <username>" when signed in, plus the time of day and the last lookup.
+let greetedUser = '';
+function welcomeBanner(last) {
+  const user = (SYNC_URL && Sync?.state.user) || '';
+  greetedUser = user;
+  const hr = new Date().getHours();
+  const tod = hr >= 5 && hr < 12 ? 'Good morning' : hr >= 12 && hr < 18 ? 'Good afternoon' : 'Good evening';
+  const title = user ? `Welcome back, <span class="wb-name">${esc(user)}</span>` : last ? 'Welcome back' : 'Welcome to Qamus';
+  let sub = `${tod}.`;
+  if (last) {
+    const rt = relTime(last.t);
+    sub += ` You last looked up <span ${qAttr(last.q)}>${esc(last.q)}</span> ${/ago|now/.test(rt) ? rt : 'on ' + rt}.`;
+  } else sub += ' Look up a word to get started.';
+  return `<section class="welcome" aria-labelledby="wb-title"><p class="wb-ar" lang="ar">أهلًا وسهلًا</p>
+    <h1 class="wb-title" id="wb-title">${title}</h1><p class="wb-sub">${sub}</p></section>`;
+}
 function home() {
   view = 'home';
   const h = liveHistory().slice(0, HIST_HOME);
-  main.innerHTML = `<div class="empty muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
+  main.innerHTML = `${welcomeBanner(h[0])}<div class="empty home-help muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
     <p style="font-size:14px">Hamzas, harakat, ة/ه and ى/ي don’t matter. Prefixes and suffixes are stripped automatically.</p></div>
     ${hasVocab() && dueCount(liveCards()) ? vocabLink() : ''}
     ${h.length ? `<div class="sec-row"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
@@ -915,9 +931,12 @@ function initSync() {
     Store.on('change', refresh);
     refresh();
     if (!SYNC_URL) return;
-    Sync.on('status', renderAcct);
+    // re-greet on home when the signed-in user changes (sign-in, sign-out)
+    const regreet = st => { if (view === 'home' && (st.user || '') !== greetedUser) home(); };
+    Sync.on('status', st => { renderAcct(st); regreet(st); });
     Sync.init({ url: SYNC_URL });
     renderAcct(Sync.state);
+    regreet(Sync.state);
     acctEl.hidden = false;
     acctEl.addEventListener('click', () => go('account'));
     if (!Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet();

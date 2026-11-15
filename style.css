@@ -105,6 +105,16 @@ h2.sec { font: 600 13px system-ui, sans-serif; text-transform: uppercase; letter
 .history button { font: 20px var(--ar); background: var(--card); border: 1px solid var(--line); color: var(--ink);
   border-radius: 999px; padding: 4px 14px; cursor: pointer; }
 .empty { text-align: center; padding: 40px 0; }
+.empty.home-help { padding: 20px 0 8px; }
+
+/* home greeting */
+.welcome { margin: 8px 0 0; padding: 18px 20px 20px; border: 1px solid var(--line); border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent-soft), var(--card) 70%); }
+.wb-ar { margin: 0; font: 22px/1.5 var(--ar); color: var(--accent); text-align: left; }
+.wb-title { margin: 0 0 6px; font: 600 26px/1.25 var(--en); overflow-wrap: anywhere; }
+.wb-name { color: var(--accent); }
+.wb-sub { margin: 0; color: var(--muted); font-size: 16px; overflow-wrap: anywhere; }
+.wb-sub [lang=ar] { font-size: 1.25em; color: var(--ink); }
 mark { background: var(--hl); color: inherit; }
 
 details.lane { margin: 12px 0 4px; border: 1px solid var(--line); border-radius: 10px; }
