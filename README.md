@@ -33,7 +33,7 @@ It does three things:
   - **Browse** is a flip card with Again / Got it marks, filter chips and Shuffle (after the "دع الأيام Vocabulary" page);
   - **Review** is SM-2 spaced repetition (Again / Hard / Good / Easy) over the cards due today;
   - you can study several folders at once.
-- **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#account`.
+- **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. At 900px and wider, a side panel lists recent searches and the folder tree with due counts, and a status bar shows where your data is saved and the keys that work on the current screen. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#account`.
 - **Keyboard:**
   - `/` or ⌘K focuses search;
   - Esc leaves study or a folder;
@@ -84,20 +84,20 @@ npm test                          # unit tests, then the Playwright suite (run b
   | `history` | recording, dedupe, delete/clear/pause, migration, sync |
   | `vocab` | bookmarks, save sheet, folders, folder view, import/export |
   | `study` | Browse, marks, filters, Review/SM-2, keyboard, swipe, offline |
-  | `nav` | tabs, `#account`, the memory router, keyboard shortcuts, titles, the update notice |
+  | `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
 
 ## Project layout
 
 | Path | What it is |
 |---|---|
-| `index.html` | the shell: header with the search field, tabs and account button; loads the scripts in order |
+| `index.html` | the shell: header with the search field, tabs and account button; the side panel, reading pane and status bar; loads the scripts in order |
 | `app.js` | search and lookup (`norm`, `analyze`, `suggestions`, result views), routing, history, tabs, sheets, login and account |
 | `vocab.js` | cards and folders: bookmarks, save sheet, Vocab and folder views, CSV/JSON import and export |
 | `study.js` | study mode: Browse and Review, plus SM-2 `schedule()` |
 | `sync.js` | `QamusStore` (IndexedDB document, falling back to memory) and `QamusSync` (the push/pull loop) |
 | `merge.js` | shared merge and validation, used by both the site and the Worker |
 | `sw.js` | service worker: caches the shell and data first (cache-first), refreshed in the background |
-| `style.css` | design tokens (light and dark) and all styles |
+| `style.css` | design tokens (light and dark) and all styles: flat, ruled, one accent; `--bg` is chrome and `--card` is the reading pane |
 | `worker/` | the Cloudflare Worker (`wrangler.toml`, `src/index.js`) |
 | `tests/` | unit tests, Playwright specs, `serve.js` (static server for dev and tests) |
 | `build/`, `data/` | the dictionary data and the scripts that build it |

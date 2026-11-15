@@ -170,6 +170,7 @@ function route() {
   if (!q && name !== 'account' && document.activeElement !== qEl) qEl.value = '';   // no stale lookup on other screens
   $('#clear').hidden = !qEl.value;
   setTab(name);
+  renderSide();
   document.title = pageTitle(name, p);
   document.body.classList.toggle('studying', name === 'study');
   if (!p.has('history')) histConfirm = false;
@@ -207,6 +208,50 @@ function pageTitle(name, p) {
     study: 'Study · ' + (ids.length > 1 ? `${ids.length} folders` : fname(ids[0])),
   }[name];
   return t ? `${t} · Qamus` : 'Qamus';
+}
+
+// ---------- side panel (wide screens): recent searches and the folder tree ----------
+const sideEl = $('#side');
+function shortTime(t) {
+  const s = (Date.now() - t) / 1000;
+  return s < 60 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h'
+    : s < 86400 * 30 ? Math.round(s / 86400) + 'd' : new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+function renderSide() {
+  if (!sideEl || !Store || sideEl.hidden) return;
+  const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
+  const curQ = p.get('q') || '', curF = p.get('folder') || '';
+  const cur = on => (on ? ' on" aria-current="true' : '');
+  const recent = liveHistory().slice(0, 14);
+  let h = `<section class="side-sec" aria-label="Recent searches"><div class="side-h"><span>Recent</span>${recent.length ? '<a class="side-more" href="#history" data-sgo="history">All</a>' : ''}</div>` +
+    (recent.length ? `<ul class="side-list">${recent.map(({ q, t }) => `<li><a class="side-item${cur(q === curQ)}" href="#q=${encodeURIComponent(q)}" data-sq="${esc(q)}"><span class="side-w" ${qAttr(q)}>${esc(q)}</span><span class="side-n">${shortTime(t)}</span></a></li>`).join('')}</ul>`
+      : '<p class="side-empty">Words you look up appear here.</p>') + '</section>';
+  if (hasVocab()) {
+    const rows = tree(), due = dueCount(liveCards());
+    h += `<section class="side-sec" aria-label="Folders"><div class="side-h"><span>Folders</span>${due ? `<span class="side-due">${due} due</span>` : ''}</div>` +
+      (rows.length ? `<ul class="side-list">${rows.map(({ f, depth }) => {
+        const cs = cardsDeep(f.id), d = dueCount(cs);
+        return `<li><a class="side-item${cur(f.id === curF)}" style="--depth:${depth}" href="#folder=${encodeURIComponent(f.id)}" data-sgo="folder=${esc(f.id)}"><span class="side-w" dir="auto">${esc(f.name)}</span><span class="side-n${d ? ' due' : ''}">${d ? d + ' due' : cs.length}</span></a></li>`;
+      }).join('')}</ul>` : '<p class="side-empty">Save a word with the bookmark to start a folder.</p>') + '</section>';
+  }
+  sideEl.innerHTML = h;
+}
+sideEl?.addEventListener('click', e => {
+  const a = e.target.closest('a');
+  if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  if (a.dataset.sq != null) go({ q: a.dataset.sq }); else if (a.dataset.sgo) go(a.dataset.sgo);
+});
+
+// ---------- status bar (wide screens): where your data is, and the keys that work here ----------
+function renderStat(st) {
+  const dot = $('#stat-dot'), text = $('#stat-text');
+  if (!dot || !text) return;
+  const user = SYNC_URL && st?.user;
+  dot.className = 'sdot ' + (user ? st.status : 'local');
+  text.textContent = !SYNC_URL ? 'Saved on this device · sync is off' : !user ? 'Saved on this device · not signed in'
+    : `${st.user} · ` + ({ synced: st.lastSync ? `synced ${relTime(st.lastSync)}` : 'synced', syncing: 'syncing…', offline: 'offline, changes saved here', error: 'sync problem' }[st.status] || st.status)
+      + (st.dirty && st.status !== 'syncing' ? ' · unsynced changes' : '');
 }
 
 // ---------- tabs: Search · Vocab · History ----------
@@ -275,17 +320,22 @@ function welcomeBanner(last) {
     const rt = relTime(last.t);
     sub += ` You last looked up <span ${qAttr(last.q)}>${esc(last.q)}</span> ${/ago|now/.test(rt) ? rt : 'on ' + rt}.`;
   } else sub += ' Look up a word to get started.';
-  return `<section class="welcome" aria-labelledby="wb-title"><p class="wb-ar" lang="ar">أهلًا وسهلًا</p>
-    <h1 class="wb-title" id="wb-title">${title}</h1><p class="wb-sub">${sub}</p></section>`;
+  return `<section class="welcome" aria-labelledby="wb-title"><div class="wb-row"><h1 class="wb-title" id="wb-title">${title}</h1><span class="wb-ar" lang="ar">أهلًا وسهلًا</span></div>
+    <p class="wb-sub">${sub}</p></section>`;
 }
 function home() {
   view = 'home';
   const h = liveHistory().slice(0, HIST_HOME);
-  main.innerHTML = `${welcomeBanner(h[0])}<div class="empty home-help muted"><p>Type an Arabic word, a root like <span lang="ar">ك ت ب</span>, or an English word.</p>
-    <p style="font-size:14px">Hamzas, harakat, ة/ه and ى/ي don’t matter. Prefixes and suffixes are stripped automatically.</p></div>
-    ${hasVocab() && dueCount(liveCards()) ? vocabLink() : ''}
-    ${h.length ? `<div class="sec-row"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
-    <div class="history">${h.map(({ q }) => `<button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>` : ''}`;
+  main.innerHTML = `${welcomeBanner(h[0])}
+    ${hasVocab() && dueCount(liveCards()) ? `<h2 class="sec">Study</h2>${vocabLink()}` : ''}
+    ${h.length ? `<div class="sec-row home-recent"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
+    <div class="history home-recent">${h.map(({ q, t }) => `<div class="h-row"><button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button><span class="hist-time">${relTime(t)}</span></div>`).join('')}</div>` : ''}
+    <h2 class="sec">How to search</h2>
+    <div class="empty home-help"><dl class="howto">
+      <dt lang="ar">كتاب · يكتبون</dt><dd>An Arabic word in any inflection. Prefixes and suffixes are stripped automatically.</dd>
+      <dt lang="ar">ك ت ب</dt><dd>A root, with spaces or dashes between the letters.</dd>
+      <dt>book · kitab</dt><dd>English, or a transliteration.</dd></dl>
+      <p class="muted howto-note">Hamzas, harakat, ة/ه and ى/ي don’t matter.</p></div>`;
 }
 
 function search(q) {
@@ -451,8 +501,9 @@ function rootLabel(stem) {
 function bwCard(a) {
   const R = rootLabel(a.stem);
   const w = a.stem[4] || a.stem[0];
-  return `<div class="bw">${SB({ s: 'lexicon', r: w, w, g: a.stem[2].replace(/;/g, '; '), root: R }, w)}<span class="w" lang="ar">${esc(w)}</span> ${esc(a.stem[2].replace(/;/g, '; '))}
-    <div class="muted" style="font-size:14px">${R ? `root <span lang="ar">${esc(R)}</span> · ` : ''}not in Hans Wehr</div></div>`;
+  return `<div class="bw"><div class="e-hw"><span class="w" lang="ar">${esc(w)}</span></div>
+    <div class="e-body"><div class="def">${esc(a.stem[2].replace(/;/g, '; '))}</div>
+    <div class="e-meta muted">${R ? `root <span lang="ar">${esc(R)}</span> · ` : ''}not in Hans Wehr</div></div>${SB({ s: 'lexicon', r: w, w, g: a.stem[2].replace(/;/g, '; '), root: R }, w)}</div>`;
 }
 
 let lastLaneWord = '';
@@ -469,9 +520,9 @@ function wRoots(k) {  // build-time link to Hans Wehr, else the morphological an
 function wCard(k) {
   const e = W.entries[k], rs = wRoots(k);
   const R = rs.length ? [...byId.get(rs[0])[1]].join(' ') : '';
-  return `<div class="bw">${SB({ s: 'wikt', r: String(k) }, e[0])}<span class="w" lang="ar">${esc(e[0])}</span>${e[1] ? ` <i class="muted">${esc(e[1])}</i>` : ''}
-    <div class="def wk">${defHtml(e[2], ['i', 'br', 'ol', 'li'])}</div>
-    ${R ? `<div class="muted" style="font-size:14px">root <span lang="ar">${esc(R)}</span></div>` : ''}</div>`;
+  return `<div class="bw"><div class="e-hw"><span class="w" lang="ar">${esc(e[0])}</span>${e[1] ? ` <i class="tr muted">${esc(e[1])}</i>` : ''}</div>
+    <div class="e-body"><div class="def wk">${defHtml(e[2], ['i', 'br', 'ol', 'li'])}</div>
+    ${R ? `<div class="e-meta muted">root <span lang="ar">${esc(R)}</span></div>` : ''}</div>${SB({ s: 'wikt', r: String(k) }, e[0])}</div>`;
 }
 function laneKey(n) {
   if (!laneRoots) return n;
@@ -785,6 +836,7 @@ function renderAcct(st) {
   acctEl.setAttribute('aria-label', label);
   acctEl.title = label;
   acctEl.dataset.status = st.user ? st.status : 'local';
+  renderStat(st);
 }
 
 function loginSheet({ onClose } = {}) {
@@ -927,8 +979,12 @@ function initSync() {
       // 'study' renders itself; a store change must not flip the card back mid-session
       else if (view === 'result' && hasVocab()) markSaved(main);
       updateTabBadge();
+      renderSide();
     };
     Store.on('change', refresh);
+    if (sideEl) sideEl.hidden = false;
+    const statEl = $('#statusbar'); if (statEl) statEl.hidden = false;
+    renderStat(null);
     refresh();
     if (!SYNC_URL) return;
     // re-greet on home when the signed-in user changes (sign-in, sign-out)

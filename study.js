@@ -183,15 +183,15 @@ function controlsHtml() {
   const has = ss.deck.length && !(ss.mode === 'review' && ss.done);
   if (ss.mode === 'browse') {
     const m = has ? markOf(ss.deck[ss.idx]) : 0;
-    return `<button type="button" class="st-btn nav" id="st-prev" aria-label="Previous card" ${has && ss.idx > 0 ? '' : 'disabled'}>‹</button>
-      <button type="button" class="st-btn again" id="st-again" aria-pressed="${m === MARK_AGAIN}" ${has ? '' : 'disabled'}>Again</button>
-      <button type="button" class="st-btn got" id="st-got" aria-pressed="${m === MARK_GOT}" ${has ? '' : 'disabled'}>Got it</button>
-      <button type="button" class="st-btn nav" id="st-next" aria-label="Next card" ${has && ss.idx < ss.deck.length - 1 ? '' : 'disabled'}>›</button>`;
+    return `<button type="button" class="st-btn nav" id="st-prev" data-key="←" aria-label="Previous card" ${has && ss.idx > 0 ? '' : 'disabled'}>‹</button>
+      <button type="button" class="st-btn again" id="st-again" data-key="1" aria-pressed="${m === MARK_AGAIN}" ${has ? '' : 'disabled'}>Again</button>
+      <button type="button" class="st-btn got" id="st-got" data-key="2" aria-pressed="${m === MARK_GOT}" ${has ? '' : 'disabled'}>Got it</button>
+      <button type="button" class="st-btn nav" id="st-next" data-key="→" aria-label="Next card" ${has && ss.idx < ss.deck.length - 1 ? '' : 'disabled'}>›</button>`;
   }
   if (!has) return '';
-  if (!ss.flipped) return `<button type="button" class="st-btn show" id="st-show">Show answer</button>`;
+  if (!ss.flipped) return `<button type="button" class="st-btn show" id="st-show" data-key="Space">Show answer</button>`;
   const prev = reviewOf(ss.deck[ss.idx]);
-  return ['Again', 'Hard', 'Good', 'Easy'].map((l, g) => `<button type="button" class="st-btn grade g${g}" id="st-g${g}">
+  return ['Again', 'Hard', 'Good', 'Easy'].map((l, g) => `<button type="button" class="st-btn grade g${g}" id="st-g${g}" data-key="${g + 1}">
     <span>${l}</span><small>${esc(intervalLabel(prev, g))}</small></button>`).join('');
 }
 function tallyHtml() {
@@ -217,8 +217,8 @@ function renderStudy() {
       <div class="st-sub"><span>${browse ? 'Browse' : 'Review · spaced repetition'}</span><span class="st-tally" id="st-tally">${tallyHtml()}</span></div>
     </header>
     <section class="st-filters" aria-label="Study options">
-      <div class="st-row" role="group" aria-label="Mode">
-        ${chip('st-mode-browse', 'Browse', browse, 'data-st-mode="browse"')}${chip('st-mode-review', 'Review', !browse, 'data-st-mode="review"')}
+      <div class="st-row st-modes" role="group" aria-label="Mode"><span class="st-seg">
+        ${chip('st-mode-browse', 'Browse', browse, 'data-st-mode="browse"')}${chip('st-mode-review', 'Review', !browse, 'data-st-mode="review"')}</span>
         <button type="button" class="st-chip" id="st-dir" aria-label="Direction: ${ss.st.dir === 'en' ? 'English to Arabic' : 'Arabic to English'}. Switch">${ss.st.dir === 'en' ? 'English → Arabic' : 'Arabic → English'}</button>
       </div>
       ${ss.groups.length > 1 ? `<div class="st-row" role="group" aria-label="Filter by folder">

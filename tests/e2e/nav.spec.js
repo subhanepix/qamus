@@ -209,6 +209,49 @@ test.describe('navigation (local)', () => {
     expect(await page.evaluate(() => location.hash)).toBe('');
   });
 
+  test('wide: side panel lists recents and folders with due counts, and navigates; status bar shows where data lives', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await boot(page);
+    await seed(page, { folders: [{ id: 'f_a', name: 'Poem' }, { id: 'f_b', name: 'Verbs', parent: 'f_a' }], cards: TWO });
+    const now = Date.now();
+    await page.evaluate(es => QamusStore.mutate(d => { d.history = es; }), Array.from({ length: 20 }, (_, i) => ({ q: 'w' + i, t: now - i * 60000 })));
+    const side = page.locator('#side');
+    await expect(side).toBeVisible();
+    await expect(side.locator('[data-sq]')).toHaveCount(14);
+    await expect(side.locator('[data-sq]').first()).toContainText('w0');
+    await expect(side.locator('[data-sgo="folder=f_a"]')).toContainText('Poem');
+    await expect(side.locator('[data-sgo="folder=f_a"]')).toContainText('2 due');
+    await expect(side.locator('[data-sgo="folder=f_b"]')).toContainText('0');
+    await expect(page.locator('main .home-recent').first()).toBeHidden();          // not duplicated in the reading pane
+    // the panel never scrolls the page sideways and sits under the header, left of main
+    const [sb, mb] = [await side.boundingBox(), await page.locator('main').boundingBox()];
+    expect(sb.x).toBe(0); expect(Math.round(sb.x + sb.width)).toBeLessThanOrEqual(Math.round(mb.x));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+
+    await side.locator('[data-sgo="folder=f_a"]').click();
+    await expect(page).toHaveURL(/#folder=f_a$/);
+    await expect(page.locator('main .folder-title')).toHaveText('Poem');
+    await expect(side.locator('[data-sgo="folder=f_a"]')).toHaveAttribute('aria-current', 'true');
+    await side.locator('[data-sgo="history"]').click();
+    await expect(page).toHaveURL(/#history$/);
+    await side.locator('[data-sq="w3"]').click();
+    await expect(page).toHaveURL(/#q=w3$/);
+    await expect(side.locator('[data-sq="w3"]')).toHaveAttribute('aria-current', 'true');
+
+    const bar = page.locator('#statusbar');
+    await expect(bar).toBeVisible();
+    await expect(bar.locator('#stat-text')).toHaveText('Saved on this device · sync is off');
+    const bb = await bar.boundingBox();
+    expect(Math.round(bb.y + bb.height)).toBe(768);
+  });
+
+  test('phone: no side panel or status bar', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await boot(page);
+    await expect(page.locator('#side')).toBeHidden();
+    await expect(page.locator('#statusbar')).toBeHidden();
+  });
+
   test('home greets: first visit, then "Welcome back" with the last lookup', async ({ page }) => {
     await boot(page);
     const w = page.locator('main .welcome');
@@ -266,6 +309,7 @@ test.describe('navigation (synced)', () => {
     await device(page, user);
     await expect(page.locator('main .wb-title')).toHaveText(`Welcome back, ${user}`);
     await expect(page.locator('main .wb-name')).toHaveText(user);
+    await expect(page.locator('#stat-text')).toContainText(user + ' · ');
     await page.evaluate(() => QamusSync.signOut({ force: true }));
     await expect(page.locator('main .wb-name')).toHaveCount(0);
     await expect(page.locator('main .wb-title')).not.toContainText(user);

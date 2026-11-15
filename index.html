@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <title>Qamus</title>
-<meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16181b" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -15,16 +15,18 @@
 <link rel="icon" href="icon-512.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Noto+Naskh+Arabic:wght@400;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;500;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="bar">
   <div class="search-wrap">
+    <span class="brand" aria-hidden="true"><span lang="ar">قاموس</span> Qamus</span>
     <button id="back" aria-label="Back" hidden>‹</button>
     <div class="field">
     <input id="q" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
            placeholder="ابحث · word, root (ك ت ب), or English" enterkeyhint="search" dir="auto">
+    <kbd class="q-kbd" aria-hidden="true">/</kbd>
     <button id="clear" class="icon-btn" aria-label="Clear" hidden>×</button>
     <ul id="suggest" class="suggest" role="listbox" hidden></ul>
     </div>
@@ -39,9 +41,17 @@
     </button>
   </div>
 </header>
-<main id="main">
-  <p id="status" class="muted">Loading dictionary…</p>
-</main>
+<div class="shell">
+  <aside id="side" class="side" aria-label="Recent searches and folders" hidden></aside>
+  <main id="main">
+    <p id="status" class="muted">Loading dictionary…</p>
+  </main>
+</div>
+<footer id="statusbar" class="statusbar" hidden>
+  <span class="stat-sync"><span class="sdot local" id="stat-dot"></span><span id="stat-text">Saved on this device</span></span>
+  <span class="stat-keys stat-keys-main" aria-hidden="true"><kbd>/</kbd> search <kbd>Esc</kbd> back <kbd>↑</kbd><kbd>↓</kbd> suggestions</span>
+  <span class="stat-keys stat-keys-study" aria-hidden="true"><kbd>Space</kbd> flip <kbd>←</kbd><kbd>→</kbd> move <kbd>1</kbd>–<kbd>4</kbd> mark / grade <kbd>Esc</kbd> leave</span>
+</footer>
 <script src="merge.js"></script>
 <script src="sync.js"></script>
 <script src="app.js"></script>

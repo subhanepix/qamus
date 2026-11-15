@@ -63,7 +63,8 @@ test.describe('local history', () => {
     await expect.poll(() => live(page)).toEqual([word, 'مدرسة']);
   });
 
-  test('home shows the 12 most recent as chips; "See all" opens History', async ({ page }) => {
+  test('home shows the 12 most recent; "See all" opens History', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });   // on wide screens the side panel lists them instead
     await boot(page);
     const now = Date.now();
     await seed(page, Array.from({ length: 15 }, (_, i) => ({ q: 'w' + i, t: now - i * 1000 })));
@@ -71,7 +72,7 @@ test.describe('local history', () => {
     await expect(page.locator('main .history button').first()).toHaveText('w0');
     await page.getByRole('button', { name: 'See all' }).click();
     await expect(page).toHaveURL(/#history$/);
-    await expect(page.locator('main h2.sec')).toHaveText('History · 15 searches');
+    await expect(page.locator('main h2.sec').first()).toHaveText('History · 15 searches');
   });
 
   test('History view: relative times, tap re-runs the search, ✕ deletes', async ({ page }) => {

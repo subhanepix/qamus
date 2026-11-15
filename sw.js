@@ -1,4 +1,4 @@
-const VERSION = 'qamus-v9';
+const VERSION = 'qamus-v10';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'vocab.js', 'study.js', 'manifest.webmanifest', 'icon-512.png',
   'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json'];
 
