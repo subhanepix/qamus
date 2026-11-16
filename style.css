@@ -52,7 +52,9 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
 .gear:hover { color: var(--ink); border-color: var(--muted); }
 .gear[aria-current="page"] { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .gear:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-#q { width: 100%; height: 44px; font: 24px/1.2 var(--ar); padding: 0 40px 0 12px; border-radius: var(--r);
+/* Scheherazade's marks rise to 1.3em above the baseline and its tails drop 0.52em below, so anything that clips
+   Arabic (an input, or a box with overflow: hidden) gets a line height of 2 or the glyphs are cut off. */
+#q { width: 100%; height: 48px; font: 22px/2 var(--ar); padding: 0 40px 0 12px; border-radius: var(--r);
   border: 1px solid var(--line); background: var(--card); color: var(--ink); outline: none;
   -webkit-appearance: none; appearance: none; }
 #q::placeholder { font: 15px var(--ui); color: var(--muted); }
@@ -70,7 +72,7 @@ body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-a
   cursor: pointer; min-height: 44px; }
 .suggest li:last-child { border-bottom: 0; }
 .suggest li.on, .suggest li:hover { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-.suggest .w { font: 24px/1.35 var(--ar); flex: none; min-width: 4.5rem; text-align: left; }
+.suggest .w { font: 24px/2 var(--ar); flex: none; min-width: 4.5rem; text-align: left; }
 .suggest .g { color: var(--muted); font-size: 15px; flex: 1; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; }
 .tag { font: 600 11px/1 var(--ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); white-space: nowrap;
@@ -113,7 +115,7 @@ main { max-width: 760px; margin: 0 auto; padding-block: 2px 48px;
 .side-item.on { background: var(--card); border-left-color: var(--accent); font-weight: 600; }
 .side-item:focus-visible, .side-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .side-w { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.side-w[lang=ar] { font: 21px/1.4 var(--ar); }
+.side-w[lang=ar] { font: 21px/2 var(--ar); }
 .side-n { flex: none; font: 12px var(--ui); color: var(--muted); font-variant-numeric: tabular-nums; }
 .side-n.due { color: var(--accent); font-weight: 600; }
 .side-empty { margin: 0; padding: 4px 16px 8px; font: 13px/1.4 var(--ui); color: var(--muted); }
@@ -263,12 +265,12 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .recent-tile:hover { border-color: var(--accent); color: var(--accent); }
 .recent-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rt-w { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 16px/1.4 var(--en); }
-.rt-w[lang=ar] { font: 25px/1.35 var(--ar); }
+.rt-w[lang=ar] { font: 25px/2 var(--ar); margin-block: -6px; }   /* tall line so marks aren't clipped; tucked in to keep tiles compact */
 .rt-t { font: 12px var(--ui); color: var(--muted); font-variant-numeric: tabular-nums; }
 .history { display: block; }
 .h-row { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .history button { flex: 1; min-width: 0; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); cursor: pointer;
-  font: 24px/1.4 var(--ar); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  font: 24px/2 var(--ar); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history button[dir] { font: 16px var(--en); }
 .history button:hover { color: var(--accent); }
 .history button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -303,7 +305,7 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .set-back { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; max-width: 100%; padding: 0 12px 0 6px; margin-left: -6px;
   border: 1px solid var(--line); border-radius: var(--r); background: var(--card); color: var(--accent); font: 600 14px var(--ui); cursor: pointer; }
 .set-back > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.set-back [lang=ar] { font: 20px/1 var(--ar); }
+.set-back [lang=ar] { font: 20px/2 var(--ar); }
 .set-back svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .set-back:hover { background: var(--accent-soft); }
 .set-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -402,7 +404,7 @@ body.sheet-open { overflow: hidden; }
 .hist-row.gone { opacity: 0; }
 .hist-q { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 12px; min-height: 48px; padding: 4px 0;
   border: 0; background: none; color: var(--ink); text-align: start; cursor: pointer; font: inherit; }
-.hist-q .w { font-size: 25px; line-height: 1.4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-q .w { font-size: 25px; line-height: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hist-q .w[dir] { font: 16px var(--en); }
 .hist-time { margin-left: auto; flex: none; color: var(--muted); font: 12px var(--ui); font-variant-numeric: tabular-nums; }
 .hist-del { flex: none; width: 44px; height: 44px; border: 0; border-radius: var(--r); background: none; color: var(--muted);
@@ -452,7 +454,7 @@ body.sheet-open { overflow: hidden; }
 .card-row .pick { flex: none; display: flex; align-items: center; justify-content: center; width: 44px; cursor: pointer; }
 .card-row .pick input { width: 20px; height: 20px; accent-color: var(--accent); }
 .cw { flex: none; max-width: 45%; min-height: 48px; padding: 4px 0; border: 0; background: none; color: var(--ink);
-  font: 26px/1.4 var(--ar); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  font: 26px/2 var(--ar); text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cw:hover { color: var(--accent); }
 .cg { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 4px 0;
   border: 0; background: none; color: var(--ink); text-align: start; cursor: pointer; font: 15px/1.4 var(--en); }
@@ -515,6 +517,7 @@ body.sheet-open { overflow: hidden; }
 .cf-meta { font: 13px var(--ui); }
 .card-form textarea.inp, .sheet textarea.inp { width: 100%; resize: vertical; font: 16px/1.45 var(--en); }
 .card-form textarea[lang="ar"], .ar-inp, .card-form input[lang="ar"] { font: 22px/1.5 var(--ar); }
+.ar-inp, .card-form input[lang="ar"] { line-height: 2; padding-block: 1px; }   /* inputs clip to the line box: room for marks and tails */
 .card-form .inp:not(select), .sheet input.inp, .sheet select.inp { width: 100%; }
 .field-row .inp { width: auto; }
 select.inp { -webkit-appearance: none; appearance: none; padding-right: 32px; cursor: pointer;

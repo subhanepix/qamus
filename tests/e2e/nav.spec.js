@@ -296,6 +296,25 @@ test.describe('navigation (local)', () => {
     await expect(page).toHaveURL(/#vocab$/);
   });
 
+  test('Arabic is never cut off where text is clipped: the search field and trimmed rows leave room for marks and tails', async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 820 });                 // side panel visible too
+    await boot(page);
+    await seed(page, { cards: [{ id: 'c1', word: 'يُعَلِّمُ' }] });
+    await page.evaluate(() => QamusStore.mutate(d => { d.history = [{ q: 'نشرح', t: Date.now() }]; }));
+    await page.locator('#q').fill('كتا');
+    await expect(page.locator('#suggest .w').first()).toBeVisible();
+    // Scheherazade's marks reach 1.29em above the baseline and its tails 0.52em below: a line box under ~1.94em clips them
+    const ratio = sel => page.locator(sel).first().evaluate(e => { const c = getComputedStyle(e); return parseFloat(c.lineHeight) / parseFloat(c.fontSize); });
+    for (const sel of ['#q', '#suggest .w', 'main .rt-w[lang=ar]', '#side .side-w[lang=ar]']) expect(await ratio(sel), sel).toBeGreaterThanOrEqual(1.94);
+    const q = await page.locator('#q').evaluate(e => { const c = getComputedStyle(e); return [parseFloat(c.lineHeight), e.clientHeight]; });
+    expect(q[0]).toBeLessThanOrEqual(q[1]);                                  // and the line fits inside the field
+    await page.locator('#q').fill('');
+    await page.evaluate(() => go('history'));
+    expect(await ratio('main .hist-q .w'), 'history row').toBeGreaterThanOrEqual(1.94);
+    await page.evaluate(() => go('folder=f_a'));
+    expect(await ratio('main .cw'), 'folder card word').toBeGreaterThanOrEqual(1.94);
+  });
+
   for (const scheme of ['light', 'dark']) {
     test(`home fits 390px with 44px targets (${scheme})`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
