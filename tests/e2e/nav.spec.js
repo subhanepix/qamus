@@ -222,7 +222,7 @@ test.describe('navigation (local)', () => {
     await expect(side.locator('[data-sgo="folder=f_a"]')).toContainText('Poem');
     await expect(side.locator('[data-sgo="folder=f_a"]')).toContainText('2 due');
     await expect(side.locator('[data-sgo="folder=f_b"]')).toContainText('0');
-    await expect(page.locator('main .home-recent').first()).toBeHidden();          // not duplicated in the reading pane
+    await expect(page.locator('main .recent-tile')).toHaveCount(12);             // home lists them too, under the welcome
     // the panel never scrolls the page sideways and sits under the header, left of main
     const [sb, mb] = [await side.boundingBox(), await page.locator('main').boundingBox()];
     expect(sb.x).toBe(0); expect(Math.round(sb.x + sb.width)).toBeLessThanOrEqual(Math.round(mb.x));
@@ -265,6 +265,51 @@ test.describe('navigation (local)', () => {
     await expect(w.locator('.wb-name')).toHaveCount(0);
     await expect(page.locator('main .empty')).toBeVisible();
   });
+
+  test('home order: study card, then the welcome, then recent searches; Review now starts review of what is due', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await boot(page);
+    await expect(page.locator('main .home-study')).toHaveCount(0);           // nothing saved yet: no study card
+    await seed(page, { folders: [{ id: 'f_a', name: 'Poem' }, { id: 'f_b', name: 'Verbs' }], cards: [...TWO, { id: 'c3', word: 'درس', folder: 'f_b' }] });
+    await page.evaluate(() => QamusStore.mutate(d => { d.history = [{ q: 'كتاب', t: Date.now() }, { q: 'book', t: Date.now() - 6e4 }]; }));
+    const study = page.locator('main .home-study');
+    await expect(study.locator('.hs-big')).toHaveText('3 cards to study');
+    await expect(study.locator('.hs-meta')).toHaveText('across 2 folders · 3 words saved');
+    const order = await page.locator('main > *').evaluateAll(els => els.map(e => e.className.split(' ')[0]).filter(c => ['home-study', 'welcome', 'recent-grid'].includes(c)));
+    expect(order).toEqual(['home-study', 'welcome', 'recent-grid']);
+    await expect(page.locator('main .recent-tile .rt-w')).toHaveText(['كتاب', 'book']);
+    await expect(page.locator('main .recent-tile').first()).toContainText('just now');
+    const [a, b] = [await page.locator('main .recent-tile').nth(0).boundingBox(), await page.locator('main .recent-tile').nth(1).boundingBox()];
+    expect(a.height).toBe(b.height);                                          // tiles in a row line up
+    expect(a.height).toBeGreaterThanOrEqual(44);
+
+    await study.getByRole('button', { name: 'Review now' }).click();
+    await expect(page).toHaveURL(/#study=f_a,f_b&mode=review$|#study=f_b,f_a&mode=review$/);
+    await expect(page.locator('#st-card')).toBeVisible();
+
+    await page.evaluate(() => QamusStore.mutate(d => { for (const c of d.cards) d.reviews[c.id] = { due: Date.now() + 864e5 * 5, interval: 5, ease: 2.5, reps: 2, lapses: 0, last: Date.now(), updatedAt: Date.now() }; }));
+    await page.evaluate(() => go(''));
+    await expect(study.locator('.hs-big')).toHaveText('All caught up');
+    await expect(study.locator('.hs-meta')).toHaveText('Nothing due today · 3 words saved');
+    await expect(study.getByRole('button', { name: 'Review now' })).toHaveCount(0);
+    await study.getByRole('button', { name: 'Open Vocab' }).click();
+    await expect(page).toHaveURL(/#vocab$/);
+  });
+
+  for (const scheme of ['light', 'dark']) {
+    test(`home fits 390px with 44px targets (${scheme})`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.emulateMedia({ colorScheme: scheme });
+      await boot(page);
+      await seed(page, { cards: TWO });
+      await page.evaluate(() => QamusStore.mutate(d => { d.history = ['استقبلناهم', 'كتاب', 'a long English search phrase here'].map((q, i) => ({ q, t: Date.now() - i * 6e4 })); }));
+      await expect(page.locator('main .recent-tile')).toHaveCount(3);
+      const m = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+      expect(m[0]).toBeLessThanOrEqual(m[1]);
+      const hs = await page.locator('main button:visible').evaluateAll(bs => bs.map(b => [b.textContent.trim().slice(0, 20), Math.round(b.getBoundingClientRect().height)]));
+      for (const [label, h] of hs) expect(h, label).toBeGreaterThanOrEqual(44);
+    });
+  }
 });
 
 test.describe('navigation (synced)', () => {

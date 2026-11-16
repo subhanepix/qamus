@@ -476,16 +476,33 @@ function welcomeBanner(last) {
     const rt = relTime(last.t);
     sub += ` You last looked up <span ${qAttr(last.q)}>${esc(last.q)}</span> ${/ago|now/.test(rt) ? rt : 'on ' + rt}.`;
   } else sub += ' Look up a word to get started.';
-  return `<section class="welcome" aria-labelledby="wb-title"><div class="wb-row"><h1 class="wb-title" id="wb-title">${title}</h1><span class="wb-ar" lang="ar">أهلًا وسهلًا</span></div>
-    <p class="wb-sub">${sub}</p></section>`;
+  return `<section class="welcome" aria-labelledby="wb-title"><p class="wb-ar" lang="ar">أهلًا وسهلًا</p>
+    <h1 class="wb-title" id="wb-title">${title}</h1>
+    <p class="wb-sub">${sub}</p></section>
+    <p class="credit">inspired by Youssef Z.</p>`;
+}
+// Home's study card: what's due today and a button straight into review. Hidden until you've saved a word.
+function homeStudy() {
+  if (!hasVocab()) return '';
+  const cards = liveCards();
+  if (!cards.length) return '';
+  const dueCards = cards.filter(c => cardStatus(c).k !== 'later');
+  const ids = [...new Set(dueCards.map(cardFolder))];
+  const big = dueCards.length ? `<b>${dueCards.length}</b> ${dueCards.length === 1 ? 'card' : 'cards'} to study`
+    : 'All caught up';
+  const meta = dueCards.length ? `${ids.length > 1 ? `across ${ids.length} folders · ` : ''}${plural(cards.length, 'word')} saved`
+    : `Nothing due today · ${plural(cards.length, 'word')} saved`;
+  return `<section class="home-study${dueCards.length ? ' due' : ''}" aria-labelledby="hs-title">
+    <div class="hs-text"><h2 class="hs-k" id="hs-title">Study</h2><p class="hs-big">${big}</p><p class="hs-meta">${meta}</p></div>
+    <div class="hs-actions">${dueCards.length ? `<button type="button" class="btn primary" data-go="${esc(studyHash(ids, 'review'))}">Review now</button>` : ''}
+      <button type="button" class="btn ${dueCards.length ? 'quiet' : ''}" data-go="vocab">Open Vocab</button></div></section>`;
 }
 function home() {
   view = 'home';
   const h = liveHistory().slice(0, HIST_HOME);
-  main.innerHTML = `${welcomeBanner(h[0])}
-    ${hasVocab() && dueCount(liveCards()) ? `<h2 class="sec">Study</h2>${vocabLink()}` : ''}
-    ${h.length ? `<div class="sec-row home-recent"><h2 class="sec">Recent</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
-    <div class="history home-recent">${h.map(({ q, t }) => `<div class="h-row"><button ${qAttr(q)} data-q="${esc(q)}">${esc(q)}</button><span class="hist-time">${relTime(t)}</span></div>`).join('')}</div>` : ''}
+  main.innerHTML = `${homeStudy()}${welcomeBanner(h[0])}
+    ${h.length ? `<div class="sec-row home-recent"><h2 class="sec">Recent searches</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
+    <ul class="recent-grid home-recent">${h.map(({ q, t }) => `<li><button type="button" class="recent-tile" data-q="${esc(q)}"><span class="rt-w" ${qAttr(q)}>${esc(q)}</span><span class="rt-t">${relTime(t)}</span></button></li>`).join('')}</ul>` : ''}
     <h2 class="sec">How to search</h2>
     <div class="empty home-help"><dl class="howto">
       <dt lang="ar">كتاب · يكتبون</dt><dd>An Arabic word in any inflection. Prefixes and suffixes are stripped automatically.</dd>

@@ -239,13 +239,32 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 }
 
 /* ---------- home ---------- */
-.welcome { padding: 14px 0 12px; border-bottom: 1px solid var(--line); }
-.wb-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.wb-title { margin: 0; font: 600 22px/1.3 var(--en); overflow-wrap: anywhere; }
+/* Home: study card, then a roomy welcome, then recent searches */
+.welcome { padding: 32px 0 14px; }
+.wb-ar { margin: 0 0 2px; font: 30px/1.4 var(--ar); color: var(--accent); text-align: left; }
+.wb-title { margin: 0; font: 600 30px/1.2 var(--en); letter-spacing: -.01em; overflow-wrap: anywhere; }
 .wb-name { color: var(--accent); }
-.wb-ar { flex: none; font: 20px/1.3 var(--ar); color: var(--muted); }
-.wb-sub { margin: 2px 0 0; font: 14px/1.5 var(--ui); color: var(--muted); overflow-wrap: anywhere; }
-.wb-sub [lang=ar] { font: 20px/1 var(--ar); color: var(--ink); }
+.wb-sub { margin: 10px 0 0; max-width: 34em; font: 16px/1.6 var(--en); color: var(--muted); overflow-wrap: anywhere; }
+.wb-sub [lang=ar] { font: 22px/1 var(--ar); color: var(--ink); }
+.credit { margin: 0 0 4px; font: italic 12px var(--en); color: var(--muted); opacity: .6; }
+.home-study { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px 20px; margin-top: 16px;
+  padding: 16px 18px; border: 1px solid var(--line); border-radius: calc(var(--r) * 2); background: var(--bg); }
+.home-study.due { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--accent-soft); }
+.hs-k { margin: 0; font: 600 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.hs-big { margin: 2px 0 0; font: 600 20px/1.3 var(--en); }
+.hs-big b { color: var(--accent); font-size: 1.2em; font-variant-numeric: tabular-nums; }
+.hs-meta { margin: 2px 0 0; font: 13px var(--ui); color: var(--muted); }
+.hs-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.hs-actions .btn { min-height: 44px; }
+.recent-grid { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 8px; }
+.recent-grid li { display: flex; }
+.recent-tile { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; width: 100%; min-height: 64px;
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: calc(var(--r) * 1.5); background: var(--card); color: var(--ink); text-align: left; cursor: pointer; }
+.recent-tile:hover { border-color: var(--accent); color: var(--accent); }
+.recent-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rt-w { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 16px/1.4 var(--en); }
+.rt-w[lang=ar] { font: 25px/1.35 var(--ar); }
+.rt-t { font: 12px var(--ui); color: var(--muted); font-variant-numeric: tabular-nums; }
 .history { display: block; }
 .h-row { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .history button { flex: 1; min-width: 0; min-height: 44px; padding: 0; border: 0; background: none; color: var(--ink); cursor: pointer;
@@ -260,7 +279,6 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .howto dt[lang=ar] { font: 24px/1.3 var(--ar); }
 .howto dd { font-size: 15px; }
 .howto-note { margin: 8px 0 0; font: 13px var(--ui); }
-@media (min-width: 900px) { .home-recent { display: none; } }   /* the side panel lists them */
 
 /* ---------- settings ---------- */
 .set-note { margin: 8px 0; font: 14px/1.5 var(--ui); }

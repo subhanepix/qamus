@@ -64,12 +64,11 @@ test.describe('local history', () => {
   });
 
   test('home shows the 12 most recent; "See all" opens History', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });   // on wide screens the side panel lists them instead
     await boot(page);
     const now = Date.now();
     await seed(page, Array.from({ length: 15 }, (_, i) => ({ q: 'w' + i, t: now - i * 1000 })));
-    await expect(page.locator('main .history button')).toHaveCount(12);
-    await expect(page.locator('main .history button').first()).toHaveText('w0');
+    await expect(page.locator('main .recent-tile .rt-w')).toHaveCount(12);
+    await expect(page.locator('main .recent-tile .rt-w').first()).toHaveText('w0');
     await page.getByRole('button', { name: 'See all' }).click();
     await expect(page).toHaveURL(/#history$/);
     await expect(page.locator('main h2.sec').first()).toHaveText('History · 15 searches');
@@ -182,7 +181,7 @@ test.describe('local history', () => {
     await page.evaluate(() => QamusStore.init());
     await expect(page.locator('.hist-row .w')).toHaveText(['كتاب', 'قلم', 'مدرسة']);
     await page.goto('/');
-    await expect(page.locator('main .history button')).toHaveText(['كتاب', 'قلم', 'مدرسة']);
+    await expect(page.locator('main .recent-tile .rt-w')).toHaveText(['كتاب', 'قلم', 'مدرسة']);
   });
 
   for (const scheme of ['light', 'dark']) {

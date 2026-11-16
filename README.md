@@ -24,7 +24,7 @@ It does three things:
 - **History:**
   - recorded each time a result is shown; repeats are deduplicated, and searching again moves a word to the top;
   - the History tab lets you delete entries (swipe or ✕), clear everything, or pause recording;
-  - the home screen shows the 12 most recent searches.
+  - the home screen shows a study card (what's due today, with **Review now**), a welcome, then the 12 most recent searches as tiles.
 - **Vocab:**
   - a bookmark on every dictionary row saves the word into a folder, pre-filled with the meaning, root, transliteration and a link back to the entry;
   - folders can be nested, renamed, moved and deleted;
