@@ -154,10 +154,14 @@ function pick(r) {
 // In the Claude preview the hash can't carry state, so keep a small in-page history instead.
 const MEM = !!window.QAMUS_MEMORY_ROUTER;
 let memStack = [], memCur = '';
+// Where Settings was opened from, so its Back button (and Esc, and the gear again) return there.
+let beforeSettings = null;   // { route, scroll } of the last screen that wasn't Settings
 let navDepth = 0;   // in-app navigations so far; tells #account whether "back" stays inside the app
 function go(params) {   // params: object of hash params, or a bare route name like 'history'
   const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
   navDepth++;
+  // opening Settings from inside the app (the gear, or the "hidden results" link): remember where we were
+  if (h === 'settings' && view !== 'settings' && beforeSettings) Object.assign(beforeSettings, { scroll: window.scrollY, inApp: true });
   if (MEM) { if (memCur && memCur !== h) memStack.push(memCur); memCur = h; return route(); }
   if (location.hash === '#' + h) route(); else location.hash = '#' + h;
 }
@@ -165,6 +169,8 @@ function back() { if (memStack.length) { memCur = memStack.pop(); route(); } els
 if (!MEM) window.addEventListener('hashchange', route);
 function route() {
   const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
+  if (!p.has('settings')) beforeSettings = { route: MEM ? memCur : location.hash.slice(1), scroll: 0, inApp: false };
+  else if (beforeSettings && !beforeSettings.inApp) beforeSettings = null;   // a link straight to #settings: nothing to go back to
   const bk = document.getElementById('back'); if (bk) bk.hidden = !memCur;
   const q = p.get('q') || '';
   const name = routeName(p);
@@ -218,6 +224,15 @@ function pageTitle(name, p) {
 function settingsView() {
   main.dataset.empty = '';
   const pr = resultPrefs(), n = pr.order.length;
+  const sizeRow = (k, name, desc, sample) => {
+    const v = pr.size[k];
+    return `<li class="set-row size-row" data-size="${k}"><span class="set-text"><span class="set-name">${name}</span><span class="set-desc">${desc}</span>
+        <span class="size-sample size-${k}" aria-hidden="true">${sample}</span></span>
+      <span class="stepper" role="group" aria-label="${name} text size">
+        <button type="button" class="step" data-size-step="${k}" data-d="-1" aria-label="Smaller" ${v <= SIZE_MIN ? 'disabled' : ''}>A−</button>
+        <output id="size-${k}" aria-live="polite">${v}%</output>
+        <button type="button" class="step big" data-size-step="${k}" data-d="1" aria-label="Larger" ${v >= SIZE_MAX ? 'disabled' : ''}>A+</button></span></li>`;
+  };
   const row = (id, i) => {
     const d = DICTS.find(x => x.id === id), isOn = !pr.off.has(id);
     return `<li class="set-row${isOn ? '' : ' off'}" data-dict="${id}">
@@ -228,7 +243,10 @@ function settingsView() {
         title="Drag to reorder"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button></li>`;
   };
   const allOff = pr.order.every(id => pr.off.has(id));
-  renderKeepingFocus('settings', `<nav class="crumbs" aria-label="Breadcrumb"><button type="button" class="crumb" data-go="">Search</button></nav>
+  const bl = settingsBackLabel();
+  renderKeepingFocus('settings', `<nav class="crumbs set-back-bar"><button type="button" class="set-back" id="set-back">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to ${bl.ar ? `<span lang="ar">${esc(bl.text)}</span>` : esc(bl.text)}</span></button></nav>
+    <h2 class="set-title">Settings</h2>
     <h2 class="sec">Dictionaries</h2>
     <p class="set-note muted">Results show in this order; drag a row by its handle to change it. Turn a dictionary off to hide it from search results. An entry you open from Vocab or a link still shows.</p>
     <ol class="set-list" id="set-dicts">${pr.order.map(row).join('')}</ol>
@@ -236,6 +254,9 @@ function settingsView() {
     <h2 class="sec">Word analysis</h2>
     <ul class="set-list"><li class="set-row"><label class="switch set-switch"><input type="checkbox" id="set-parse" ${pr.parse ? 'checked' : ''}><span class="track" aria-hidden="true"></span>
       <span class="set-text"><span class="set-name">Show the “Parsed” breakdown</span><span class="set-desc">Prefix · stem · suffix, with what each part means</span></span></label></li></ul>
+    <h2 class="sec">Text size</h2>
+    <ul class="set-list">${sizeRow('en', 'English dictionaries', 'Hans Wehr, Wiktionary, the lexicon and Lane', 'to write; to record, put down in writing <span class="ar">كَتَبَ</span>')}
+      ${sizeRow('ar', 'Arabic dictionaries', 'al-Mufradāt and Mukhtār al-Ṣiḥāḥ', '<span dir="rtl" lang="ar">الْكُتَّابُ بِالضَّمِّ وَالتَّشْدِيدِ الْكَتَبَةُ</span>')}</ul>
     <div class="actions"><button type="button" class="btn quiet" id="set-reset">Reset to defaults</button></div>
     ${Store ? (SYNC_URL ? '<p class="set-note muted">These settings sync to your other devices.</p>' : '') : '<p class="set-note muted">Settings can’t be saved in this preview.</p>'}`);
 }
@@ -249,9 +270,18 @@ main.addEventListener('click', e => {
   if (view !== 'settings') return;
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.id === 'set-back') return leaveSettings();
   if (b.id === 'set-reset') {
-    setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true });
+    setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
     $('#set-reset')?.focus();
+  } else if (b.dataset.sizeStep) {
+    const k = b.dataset.sizeStep, d = +b.dataset.d, size = { ...resultPrefs().size };
+    size[k] = textSize(size[k] + d * SIZE_STEP);
+    setResultPrefs({ size });
+    // keep focus on a usable button: the same one, or its partner once this end is reached
+    const btns = main.querySelectorAll(`[data-size-step="${k}"]`);
+    const same = [...btns].find(x => +x.dataset.d === d);
+    (same && !same.disabled ? same : [...btns].find(x => !x.disabled))?.focus();
   }
 });
 
@@ -304,7 +334,32 @@ function endDictDrag(e) {
 main.addEventListener('pointerup', endDictDrag);
 main.addEventListener('pointercancel', endDictDrag);
 
-$('#settings-btn')?.addEventListener('click', () => go('settings'));
+$('#settings-btn')?.addEventListener('click', () => {
+  if (view === 'settings') return leaveSettings();          // the gear toggles Settings
+  go('settings');
+});
+function settingsBackLabel() {
+  const p = new URLSearchParams(beforeSettings?.route || '');
+  const q = p.get('q') || '';
+  if (routeName(p) === 'result' && q) return { text: q, ar: isAr(q) };
+  return { text: 'Search', ar: false };
+}
+function leaveSettings() {
+  const from = beforeSettings;
+  if (!from || !from.inApp) return go('');                  // opened from a link: go to the search home
+  // The Arabic sections fill in a moment after the result renders, which can shift the page; put the
+  // position back again once they have, unless you've scrolled in the meantime.
+  const restore = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+    window.scrollTo(0, from.scroll);
+    let set = window.scrollY;
+    const again = () => { if (Math.abs(window.scrollY - set) < 4) { window.scrollTo(0, from.scroll); set = window.scrollY; } };
+    Promise.all([...arShards.values()]).catch(() => {}).then(() => requestAnimationFrame(again));
+    setTimeout(again, 300);
+  }));
+  if (MEM) { back(); return restore(); }
+  window.addEventListener('hashchange', restore, { once: true });
+  history.back();                                           // back to the result, without a new history entry
+}
 
 // ---------- side panel (wide screens): recent searches and the folder tree ----------
 const sideEl = $('#side');
@@ -568,15 +623,24 @@ function resultPrefs() {
   const order = String(st.dictOrder || '').split(',').filter((id, i, a) => DICT_IDS.includes(id) && a.indexOf(id) === i);
   for (const id of DICT_IDS) if (!order.includes(id)) order.push(id);
   const off = new Set(String(st.dictOff || '').split(',').filter(id => DICT_IDS.includes(id)));
-  return { order, off, parse: st.showParse !== false };
+  return { order, off, parse: st.showParse !== false, size: { en: textSize(st.textEn), ar: textSize(st.textAr) } };
 }
-function setResultPrefs({ order, off, parse }) {
+// Text size of dictionary entries, in percent: one for the English dictionaries, one for the Arabic ones.
+const SIZE_MIN = 80, SIZE_MAX = 160, SIZE_STEP = 10;
+const textSize = v => (Number.isFinite(v) ? Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP)) : 100);
+function applyTextSizes() {
+  const { size } = resultPrefs(), s = document.documentElement.style;
+  s.setProperty('--t-en', size.en / 100);
+  s.setProperty('--t-ar', size.ar / 100);
+}
+function setResultPrefs({ order, off, parse, size }) {
   if (!Store) return;
   Store.mutate(d => {
     const next = { ...d.settings, updatedAt: Date.now() };
     if (order) next.dictOrder = order.join(',');
     if (off) next.dictOff = [...off].join(',');
     if (parse !== undefined) next.showParse = !!parse;
+    if (size) { next.textEn = textSize(size.en); next.textAr = textSize(size.ar); }
     d.settings = next;
   });
 }
@@ -1186,6 +1250,7 @@ function initSync() {
   Store.init().then(() => {
     migrateHist();
     const refresh = () => {
+      applyTextSizes();
       if (view === 'home') home();
       else if (view === 'history') historyView();
       else if (view === 'settings') settingsView();
@@ -1253,6 +1318,9 @@ document.addEventListener('keydown', e => {
   const typing = e.target.matches?.('input, textarea, select, [contenteditable="true"]');
   if ((e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
     e.preventDefault(); qEl.focus(); qEl.select(); return;
+  }
+  if (e.key === 'Escape' && view === 'settings' && !e.target.matches?.('input[type=search], input[type=text], textarea')) {
+    e.preventDefault(); return leaveSettings();             // switches and buttons in Settings don't swallow Esc
   }
   if (e.key !== 'Escape' || typing) return;
   if (view === 'study' && typeof backHash === 'function' && ss) go(backHash());

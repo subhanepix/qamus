@@ -35,7 +35,7 @@ It does three things:
   - **Review** is SM-2 spaced repetition (Again / Hard / Good / Easy) over the cards due today;
   - you can study several folders at once.
 - **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. At 900px and wider, a side panel lists recent searches and the folder tree with due counts, and a status bar shows where your data is saved and the keys that work on the current screen. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#settings`, `#account`.
-- **Settings** (`#settings`, from the gear beside the search field on the home and result pages): turn each dictionary on or off, drag them into the order they show in results (or use the arrow keys on a row's handle), and show or hide the "Parsed" word analysis. Settings sync with your account. An entry you open directly (from Vocab or a link) always shows, even if its dictionary is off.
+- **Settings** (`#settings`, from the gear beside the search field on the home and result pages; **Back**, Esc or the gear again returns to the search you had open, where you were on the page): turn each dictionary on or off, drag them into the order they show in results (or use the arrow keys on a row's handle), and show or hide the "Parsed" word analysis, and make the text of the English and the Arabic dictionaries larger or smaller, separately (80%–160%). Settings sync with your account. An entry you open directly (from Vocab or a link) always shows, even if its dictionary is off.
 - **Keyboard:**
   - `/` or ⌘K focuses search;
   - Esc leaves study or a folder;

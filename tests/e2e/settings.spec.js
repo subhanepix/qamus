@@ -37,7 +37,8 @@ test.describe('settings (local)', () => {
     await expect(page.locator('#set-parse')).toBeChecked();
     await expect(gear).toHaveAttribute('aria-current', 'page');
     await expect(page.locator('main .settings-link')).toHaveCount(0);   // no longer a row at the bottom of home
-    await page.locator('main .crumb', { hasText: 'Search' }).click();
+    await expect(page.locator('#set-back')).toHaveText('Back to Search');     // opened from home
+    await page.locator('#set-back').click();
     await expect(page.locator('main .welcome')).toBeVisible();
   });
 
@@ -128,6 +129,73 @@ test.describe('settings (local)', () => {
     await page.evaluate(e => go({ e, q: 'كتاب' }), id.slice(1));
     await expect(page.locator('main details.root').first()).toBeVisible();
     await expect(page.locator('main .word.hit')).toHaveCount(1);
+  });
+
+  test('text size: English and Arabic dictionaries each step from 80% to 160%, persist, and reset', async ({ page }) => {
+    await boot(page);
+    await search(page, 'كتب');
+    const px = sel => page.locator(sel).first().evaluate(e => parseFloat(getComputedStyle(e).fontSize));
+    const en0 = await px('main .word > .def'), ar0 = await px('main .ard-text');
+    expect([en0, ar0]).toEqual([16, 22]);
+
+    await openSettings(page);
+    const step = (k, d) => page.locator(`[data-size-step="${k}"][data-d="${d}"]`);
+    await expect(page.locator('#size-en')).toHaveText('100%');
+    await step('en', 1).click(); await step('en', 1).click();
+    await expect(page.locator('#size-en')).toHaveText('120%');
+    await expect(step('en', 1)).toBeFocused();                                   // focus stays put after the re-render
+    for (let k = 0; k < 2; k++) await step('ar', -1).click();
+    await expect(page.locator('#size-ar')).toHaveText('80%');
+    await expect(step('ar', -1)).toBeDisabled();                                 // the smallest size
+    await expect(step('ar', 1)).toBeFocused();
+    expect(await page.evaluate(() => QamusStore.doc.settings)).toMatchObject({ textEn: 120, textAr: 80 });
+
+    await search(page, 'كتب');
+    expect(await px('main .word > .def')).toBeCloseTo(19.2, 1);                  // English definitions only
+    expect(await px('main .ard-text')).toBeCloseTo(17.6, 1);                     // Arabic dictionary text only
+    expect(await px('main .word > .hw')).toBe(28);                               // headwords keep their size
+
+    await page.reload();
+    await page.evaluate(() => QamusStore.init());
+    await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--t-en').trim() === '1.2');
+    await openSettings(page);
+    for (let k = 0; k < 10; k++) if (await step('en', 1).isEnabled()) await step('en', 1).click();
+    await expect(page.locator('#size-en')).toHaveText('160%');
+    await page.getByRole('button', { name: 'Reset to defaults' }).click();
+    await expect(page.locator('#size-en')).toHaveText('100%');
+    await expect(page.locator('#size-ar')).toHaveText('100%');
+  });
+
+  test('Back returns to the search you had open, at the same scroll position; Esc and the gear do too', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 700 });
+    await boot(page);
+    await search(page, 'كتب');
+    await page.evaluate(() => window.scrollTo(0, 900));
+    const len = await page.evaluate(() => history.length);
+    await page.locator('#settings-btn').click();
+    await expect(page).toHaveURL(/#settings$/);
+    const back = page.locator('#set-back');
+    await expect(back).toHaveText('Back to كتب');
+    await page.locator('[data-size-step="en"][data-d="1"]').click();           // changing a setting doesn't lose the way back
+    await back.click();
+    await expect(page).toHaveURL(/#q=/);
+    expect(decodeURIComponent(page.url().split('#q=')[1])).toBe('كتب');
+    await expect.poll(() => page.evaluate(() => Math.abs(window.scrollY - 900))).toBeLessThan(5);   // same place (the browser may nudge it a pixel or two to keep the same text in view)
+    expect(await page.evaluate(() => history.length)).toBe(len + 1);         // went back, didn't stack a new entry
+
+    await page.locator('#settings-btn').click();
+    await page.locator('[data-dict-on="wikt"]').focus();
+    await page.keyboard.press('Escape');                                      // Esc, even with a switch focused
+    await expect(page).toHaveURL(/#q=/);
+    await page.locator('#settings-btn').click();
+    await expect(back).toBeVisible();
+    await page.locator('#settings-btn').click();                              // the gear toggles back
+    await expect(page).toHaveURL(/#q=/);
+
+    await page.goto('/#settings');                                            // a direct link: back goes to search home
+    await expect(back).toHaveText('Back to Search');
+    await back.click();
+    await expect(page.locator('main .welcome')).toBeVisible();
   });
 
   for (const scheme of ['light', 'dark']) {
