@@ -741,14 +741,15 @@ function arHead(id, html, k) {
 function arBlock(id, k, open) {
   return `<details class="ard" data-dict="${id}" data-root="${esc(k)}" ${open ? 'open' : ''}><summary>${AR_DICTS[id].name} <span class="muted">· <span lang="ar">${esc([...k].join(' '))}</span></span></summary><div class="ard-body muted">Loading…</div></details>`;
 }
-// The texts come escaped from the build, with only <b>, <q> and <br>. Each Arabic word becomes tappable,
-// and a headword matching the search (with or without ال) is marked.
+// The texts come escaped from the build, with only <b>, <q>, <i> (verse references) and <br>. Each Arabic word
+// outside a reference becomes tappable, and a headword matching the search (with or without ال) is marked.
 function arHtml(html) {
   const want = lastArWord;
   return html.replace(/<b>([^<]*)<\/b>/g, (m, w, at) => {
     const n = norm(w).replace(/\s+/g, '');
     return at > 0 && want && (n === want || n === 'ال' + want || 'ال' + n === want) ? `<b class="hit">${w}</b>` : m;
-  }).replace(/(^|>)([^<]+)/g, (m, a, t) => a + t.replace(/[\u0621-\u063A\u0641-\u064A\u064B-\u0652]+/g, w => `<span class="lk" data-q="${w}">${w}</span>`));
+  }).replace(/<i>[^<]*<\/i>|(^|>)([^<]+)/g, (m, a, t) => t === undefined ? m
+    : a + t.replace(/[\u0621-\u063A\u0641-\u064A\u064B-\u0652\u0670]+/g, w => `<span class="lk" data-q="${w.replace(/[\u064B-\u0652\u0670]/g, '')}">${w}</span>`));
 }
 async function fillAr(d) {
   if (d.dataset.filled) return; d.dataset.filled = '1';
@@ -759,7 +760,7 @@ async function fillAr(d) {
     body.innerHTML = items.length ? items.map((html, i) => {
       const head = arHead(id, html, k);
       return `<div class="ard-entry">${SB({ s: id, r: k + ':' + i }, head)}<div class="ard-text" lang="ar" dir="rtl">${arHtml(html)}</div></div>`;
-    }).join('') + `<p class="ard-src muted">${AR_DICTS[id].full}, text from the <a href="https://openiti.org" target="_blank" rel="noopener">OpenITI</a> corpus (no vowel marks).</p>`
+    }).join('') + `<p class="ard-src muted">${AR_DICTS[id].full}, text and vowel marks from <a href="https://shamela.ws" target="_blank" rel="noopener">al-Maktaba al-Shāmila</a>.</p>`
       : '<p class="muted">No entries.</p>';
     if (hasVocab()) markSaved(body);
   } catch (err) { body.textContent = 'Couldn’t load this entry. Check your connection and try again.'; delete d.dataset.filled; }

@@ -215,6 +215,7 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .ard-text b.hit { background: var(--hl); border-radius: 2px; padding: 0 2px; }
 .ard-text q { quotes: "﴿" "﴾"; color: var(--ink); }
 .ard-text q::before, .ard-text q::after { color: var(--accent); }
+.ard-text i { font: 13px var(--ui); font-style: normal; color: var(--muted); unicode-bidi: isolate; }
 .ard-text .lk { cursor: pointer; }
 .ard-text .lk:hover { text-decoration: underline dotted var(--muted); text-underline-offset: 8px; }
 .ard-src { font: 12px var(--ui); padding: 6px var(--gutter) 10px; margin: 0; }

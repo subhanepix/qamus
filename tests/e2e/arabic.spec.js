@@ -16,27 +16,29 @@ const cards = page => page.evaluate(() => QamusStore.doc.cards.filter(c => !c.de
 test.describe('Arabic dictionaries (local)', () => {
   test.use({ syncUrl: false });
 
-  test('a root shows both dictionaries after the others, open, right to left, with Qur’an quotes marked', async ({ page }) => {
+  test('a root shows both dictionaries after the others, open, right to left, vowelled, with Qur’an quotes and verse references marked', async ({ page }) => {
     await boot(page);
     await search(page, 'كتب');
     expect(await page.locator('main h2.sec').allTextContents()).toEqual(['Wiktionary', 'Root', 'al-Mufradāt', 'Mukhtār al-Ṣiḥāḥ']);
     const muf = section(page, 'mufradat').first(), mux = section(page, 'mukhtar').first();
     await expect(muf).toHaveAttribute('open', '');
-    await expect(muf.locator('.ard-text').first()).toContainText('الكتب ضم أديم إلى أديم');
+    await expect(muf.locator('.ard-text').first()).toContainText('الْكَتْبُ: ضمّ أديم إلى أديم');
     await expect(muf.locator('.ard-text').first()).toHaveAttribute('dir', 'rtl');
-    await expect(muf.locator('.ard-text q').first()).toHaveText('الم ذلك الكتاب');
-    await expect(mux.locator('.ard-text').first()).toContainText('من باب نصر');
-    await expect(mux.locator('.ard-text b', { hasText: 'الكتيبة' }).first()).toBeVisible();   // Mukhtār's headwords in bold
-    await expect(mux.locator('.ard-src')).toContainText('OpenITI');
+    await expect(muf.locator('.ard-text q').first()).toHaveText('الم ذلِكَ الْكِتابُ');
+    await expect(mux.locator('.ard-text').first()).toContainText('مِنْ بَابِ نَصَرَ');
+    await expect(mux.locator('.ard-text b', { hasText: 'الْكَتِيبَةُ' }).first()).toBeVisible();   // Mukhtār's headwords in bold
+    await expect(muf.locator('.ard-text i').first()).toHaveText('[البقرة/ 1- 2]');   // verse references aren't tappable
+    await expect(muf.locator('.ard-text i .lk')).toHaveCount(0);
+    await expect(mux.locator('.ard-src')).toContainText('al-Maktaba al-Shāmila');
   });
 
   test('the searched word is marked in the entry, and tapping any word looks it up', async ({ page }) => {
     await boot(page);
     await search(page, 'كتيبة');
     const mux = section(page, 'mukhtar').first();
-    await expect(mux.locator('b.hit')).toHaveText(['الكتيبة']);
+    await expect(mux.locator('b.hit')).toHaveText(['الْكَتِيبَةُ']);
     await expect(mux.locator('.ard-text > b').first()).not.toHaveClass(/hit/);   // the root heading itself is never marked
-    await section(page, 'mufradat').first().locator('.lk', { hasText: /^السقاء$/ }).first().click();
+    await section(page, 'mufradat').first().locator('.lk[data-q="السقاء"]').first().click();   // tapping a vowelled word searches it without the vowels
     await expect(page).toHaveURL(/#q=/);
     expect(decodeURIComponent(page.url().split('#q=')[1])).toBe('السقاء');
   });
@@ -53,12 +55,12 @@ test.describe('Arabic dictionaries (local)', () => {
     await search(page, 'كتب');
     const btn = section(page, 'mukhtar').first().locator('.ard-entry > .save-btn').first();
     await btn.click();
-    await expect(page.locator('.sheet .pick-word [lang=ar]')).toHaveText('كتب');
+    await expect(page.locator('.sheet .pick-word [lang=ar]')).toHaveText('كَتَبَ');
     await page.locator('.sheet').getByRole('button', { name: 'Save to Inbox' }).click();
     await expect(btn).toHaveAttribute('aria-pressed', 'true');
     const [c] = await cards(page);
-    expect(c).toMatchObject({ source: 'mukhtar', ref: 'كتب:0', word: 'كتب', root: 'ك ت ب' });
-    expect(c.arGloss).toMatch(/^كتب من باب نصر/);
+    expect(c).toMatchObject({ source: 'mukhtar', ref: 'كتب:0', word: 'كَتَبَ', root: 'ك ت ب' });
+    expect(c.arGloss).toMatch(/^كَتَبَ مِنْ بَابِ نَصَرَ/);
     expect(c.arGloss).not.toMatch(/[<>]/);
     await page.evaluate(() => go('vocab'));
     await page.evaluate(id => openCard(QamusStore.doc.cards.find(c => c.id === id)), c.id);

@@ -270,7 +270,7 @@ async function prefill(p) {
   } else if (AR_DICTS[p.s]) {
     const at = f.ref.lastIndexOf(':'), { head, html } = await arEntry(p.s, f.ref);
     f.word = head; f.root = [...f.ref.slice(0, at)].join(' ');
-    f.arGloss = shortGloss(plain(html.replace(/^<b>.*?<\/b>:\s*/, '')));
+    f.arGloss = shortGloss(plain(html.replace(/^<b>.*?<\/b>(:\s*|<br>)/, '')));
   } else if (p.s === 'lexicon') {
     f.word = p.w || ''; f.gloss = shortGloss(p.g || ''); f.root = p.root || '';
   }
