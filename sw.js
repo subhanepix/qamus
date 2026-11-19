@@ -1,4 +1,5 @@
-const VERSION = 'qamus-v20';
+const PREFIX = 'qamus-';   // caches on this origin that belong to this app (other apps, like Talib, may share the origin)
+const VERSION = PREFIX + 'v21';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'merge.js', 'sync.js', 'vocab.js', 'study.js', 'manifest.webmanifest', 'icon-512.png',
   'data/index.json', 'data/hw.json', 'data/morph.json', 'data/wikt.json', 'data/lane/roots.json',
   'data/mufradat/roots.json', 'data/mukhtar/roots.json'];
@@ -9,7 +10,7 @@ self.addEventListener('install', e => {
     .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== VERSION).map(k => caches.delete(k))))
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k.startsWith(PREFIX) && k !== VERSION).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', e => {
