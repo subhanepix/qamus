@@ -526,6 +526,18 @@ function search(q) {
   const words = q.split(/\s+/).filter(Boolean);
   if (words.length > 1) return multiWord(words);
 
+  const r = lookupWord(q);
+  if (r) return showRoots(r.roots, r.opt, q);
+  // Nothing matched: try the word without a leading ال (or وال, بال…), then without an emphatic ن.
+  for (const v of retryForms(q)) {
+    const rv = lookupWord(v.word);
+    if (rv) return showRoots(rv.roots, { ...rv.opt, retry: { from: q, ...v } }, v.word);
+  }
+  fallback(q, norm(q));
+}
+
+// The dictionary lookups and the morphological analysis for one word. null when nothing at all matches.
+function lookupWord(q) {
   const n = norm(q);
   const hits = new Set(), forms = [], roots = [];
   const addRoot = id => { if (id != null && !roots.includes(id)) roots.push(id); };
@@ -547,9 +559,26 @@ function search(q) {
   for (const a of parses) for (const k of [norm(a.stem[0]), norm(a.stem[4] || '')]) for (const e of hwNorm.get(k) || []) if (roots.includes(e[4])) hits.add(e[0]);
 
   const arWord = roots.length ? '' : n;   // a root only the Arabic dictionaries have
-  if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length && !arHas(n)) return fallback(q, n);
+  if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length && !arHas(n)) return null;
   const directHit = hits.size || forms.length || wikt.length;
-  showRoots(roots, { hits, forms, parses: directHit && !parses.some(a => a.affixLen) ? [] : parses, bwOnly, wikt, laneOnly, laneWord: laneHit.size ? n : '', arWord }, q);
+  return { roots, opt: { hits, forms, parses: directHit && !parses.some(a => a.affixLen) ? [] : parses, bwOnly, wikt, laneOnly, laneWord: laneHit.size ? n : '', arWord } };
+}
+
+// Other spellings to try when a word matches nothing, in order:
+// 1. without a leading ال, وال, بال, فال, كال or لل (الكمبيوترات -> كمبيوترات);
+// 2. (the analysis found nothing too, or we wouldn't be here) without the emphatic نّ: before a pronoun ending
+//    (تغرنكم -> تغركم), then a final ن (ليكتبن -> ليكتب).
+const AL_PREFIXES = ['وال', 'بال', 'فال', 'كال', 'لل', 'ال'];
+const PRON_END = /ن(كما|كم|كن|ك|هما|هم|هن|ها|ه|ني|نا)$/;
+function retryForms(q) {
+  const w = q.replace(DIAC, '').replace(/ٱ/g, 'ا'), out = [];
+  const add = (word, why) => { if (word.length >= 2 && word !== w && !out.some(o => o.word === word)) out.push({ word, why }); };
+  const p = AL_PREFIXES.find(x => w.startsWith(x));
+  if (p) add(w.slice(p.length), 'al');
+  const m = w.match(PRON_END);
+  if (m) add(w.slice(0, m.index) + m[1], 'nun');
+  if (w.endsWith('ن')) add(w.slice(0, -1), 'nun');
+  return out;
 }
 
 function rootVariants(n) {
@@ -668,7 +697,7 @@ function showEntry(id) {
 }
 
 function showRoots(rootIds, opt, q) {
-  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', arWord = '', force = '' } = opt;
+  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', arWord = '', force = '', retry = null } = opt;
   main.dataset.empty = '';
   lastLaneWord = laneWord;
   lastArWord = norm(q || '');
@@ -694,6 +723,10 @@ function showRoots(rootIds, opt, q) {
     // the word analysis sits after the first dictionary in your order, as it did after Wiktionary by default
     if (i === 0 && pr.parse && parses.length) h += `<h2 class="sec">Parsed</h2>` + uniqParses(parses).slice(0, 4).map(parseHtml).join('');
   });
+  if (retry) {
+    const why = retry.why === 'al' ? 'without the ال at the start' : 'without the emphatic نّ';
+    h = `<p class="retry-note">No match for <span lang="ar">${esc(retry.from)}</span>. Showing <span lang="ar">${esc(retry.word)}</span>, ${why}.</p>` + h;
+  }
   if (hidden) h += `<p class="muted hidden-note">Some results are hidden by your <a href="#settings" data-go="settings">dictionary settings</a>.</p>`;
   main.innerHTML = h || '<p class="muted">Nothing found.</p>';
   if (hasVocab()) markSaved(main);

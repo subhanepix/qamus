@@ -325,6 +325,8 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .stepper output { min-width: 3.4em; text-align: center; font: 600 13px var(--ui); font-variant-numeric: tabular-nums;
   border-inline: 1px solid var(--line); line-height: 44px; }
 .hidden-note { margin: 14px 0 0; font: 13px var(--ui); }
+.retry-note { margin: 14px 0 4px; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); font: 14px/1.6 var(--ui); }
+.retry-note [lang=ar] { font: 21px/1 var(--ar); }
 
 /* ---------- account button, sheets, forms ---------- */
 .acct { flex: none; position: relative; display: flex; align-items: center; gap: 8px; height: 44px; min-width: 44px;

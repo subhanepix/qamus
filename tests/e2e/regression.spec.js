@@ -61,3 +61,41 @@ test('ك ت ب → root card + Lane section loads', async ({ page }) => {
   await lane.locator('summary').click();
   await expect(lane.locator('.lane-entry').first()).toBeVisible();
 });
+
+// When a word matches nothing, search tries it again without a leading ال (وال, بال, فال, كال, لل) and then
+// without an emphatic نّ. Words that already match are untouched (the table above).
+const RETRIES = [
+  ['تغرنكم', 'تغركم', 'غ ر', 'emphatic نّ'],        // نّ before the pronoun ending
+  ['ليسجنن', 'ليسجن', 'س ج ن', 'emphatic نّ'],      // final ن
+  ['ولنبلونكم', 'ولنبلوكم', 'ب ل و', 'emphatic نّ'],
+  ['فلنسألن', 'فلنسأل', 'س ا ل', 'emphatic نّ'],
+];
+for (const [q, shown, root, why] of RETRIES) {
+  test(`${q} → no match, so shows ${shown} (${why})`, async ({ page }) => {
+    await lookup(page, q);
+    const note = page.locator('main .retry-note');
+    await expect(note).toContainText(`No match for ${q}. Showing ${shown}, without the ${why}.`);
+    const roots = (await page.locator('main details.root .root-letters').allTextContents()).map(fold);
+    expect(roots).toContain(fold(root));
+    expect(decodeURIComponent(page.url().split('#q=')[1])).toBe(q);       // the address and history keep what you typed
+  });
+}
+
+test('الآيوا → no match, so shows آيوا without ال (a Wiktionary word the analyser doesn’t know)', async ({ page }) => {
+  await lookup(page, 'الآيوا');
+  await expect(page.locator('main .retry-note')).toContainText('Showing آيوا, without the ال at the start.');
+  await expect(page.locator('main h2.sec', { hasText: 'Wiktionary' })).toBeVisible();
+  for (const q of ['والآيوا', 'بالآيوا']) {
+    await page.evaluate(q => go({ q }), q);
+    await expect(page.locator('main .retry-note')).toContainText(`No match for ${q}. Showing آيوا`);
+  }
+});
+
+test('a word that already matches shows no retry note, and a word that still matches nothing falls back as before', async ({ page }) => {
+  await lookup(page, 'ليكتبن');                                       // the analyser handles it already
+  await expect(page.locator('main details.root').first()).toBeVisible();
+  await expect(page.locator('main .retry-note')).toHaveCount(0);
+  await page.evaluate(() => go({ q: 'الزززن' }));
+  await expect(page.locator('main')).toContainText('No exact match for الزززن');
+  await expect(page.locator('main .retry-note')).toHaveCount(0);
+});

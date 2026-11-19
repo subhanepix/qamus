@@ -16,6 +16,7 @@ It does three things:
 - **Lane's Lexicon** (47.8k entries under 5k roots), from GibreelAbdullah/LaneLexicon. It's split into one file per first letter and loaded only when you open a root's Lane section.
 - **al-Mufradāt fī gharīb al-Qur’ān** by al-Rāghib al-Iṣfahānī (ed. Ṣafwān al-Dāwūdī; 1,621 entries) and **Mukhtār al-Ṣiḥāḥ** by al-Rāzī (3,468 entries), both in Arabic, from al-Maktaba al-Shāmila's EPUBs with the printed editions' vowel marks: Mukhtār is fully vowelled, al-Mufradāt has the editor's marks on headwords and Qur'an quotes. Al-Mufradāt's Qur'an quotes are located using OpenITI's copy, which marks them (CC BY-NC-SA 4.0). Each book is split by root into one file per first letter, loaded when a result needs it. They show as their own sections, after the other dictionaries by default; every word in them can be tapped to look it up, and the word you searched is highlighted.
 - **Matching:** search ignores harakat, tatweel and hamza spelling (ء أ إ آ ٱ ؤ ئ all match ا), and treats ة/ه and ى/ي as the same.
+- **When nothing matches:** search tries the word again without a leading ال (or وال, بال, فال, كال, لل), then without an emphatic نّ: before a pronoun ending (تغرنكم → تغركم) or at the end (ليسجنن → ليسجن). A note says what it showed instead.
 - **What you can type:** an Arabic word in any inflection, a root with spaces or dashes (`ك ت ب`), English, or transliteration (`kitab`).
 - **Tap to look up:** tap any Arabic word inside a definition to look it up.
 
