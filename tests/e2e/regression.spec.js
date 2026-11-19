@@ -99,3 +99,44 @@ test('a word that already matches shows no retry note, and a word that still mat
   await expect(page.locator('main')).toContainText('No exact match for الزززن');
   await expect(page.locator('main .retry-note')).toHaveCount(0);
 });
+
+// A word found only after taking off ال is a noun, so the result shows no verb reading, and the dictionaries'
+// own sentence for it comes first (التناوش: Hans Wehr has only form III ناوش; Mukhtār and al-Mufradāt define it).
+test('التناوش → no verb reading, and the dictionaries’ sentence for it leads', async ({ page }) => {
+  await lookup(page, 'التّناوُشُ');
+  await expect(page.locator('main .retry-note')).toContainText('Showing تناوش, without the ال at the start.');
+  const lead = page.locator('main .lead');
+  await expect(lead).toBeVisible();
+  await expect(lead.locator('.lead-item').first()).toBeVisible();
+  expect(fold(await lead.locator('mark').first().textContent())).toBe('التناوش');
+  await expect(lead.locator('.lead-src')).toHaveText([/al-Mufradāt/, /Mukhtār al-Ṣiḥāḥ/]);   // in your dictionary order
+  for (const g of await page.locator('main .parse .gl').allTextContents()) expect(g).not.toContain('it/they/she');
+  await lead.locator('.lead-src').nth(1).click();
+  await expect(page.locator('main details.ard[data-dict="mukhtar"][open] b.hit').first()).toBeVisible();
+});
+
+test('with the Arabic dictionaries off, the lead quotes Lane, and Lane opens at the word', async ({ page }) => {
+  await lookup(page, 'كتاب');
+  await page.evaluate(() => { setResultPrefs({ off: ['mufradat', 'mukhtar'] }); go({ q: 'التناوش' }); });
+  const lead = page.locator('main .lead');
+  await expect(lead.locator('.lead-src')).toHaveText(/Lane’s Lexicon/);
+  expect(fold(await lead.locator('mark').textContent())).toMatch(/تناوش$/);
+  await expect(page.locator('main details.lane[open] .lane-entry.hit').first()).toBeVisible();
+});
+
+test('a word that matches as typed gets no lead', async ({ page }) => {
+  await lookup(page, 'الكتاب');
+  await expect(page.locator('main details.root').first()).toBeVisible();
+  await expect(page.locator('main .lead')).toHaveCount(0);
+});
+
+test.describe('cold load', () => {
+  test.use({ serviceWorkers: 'block' });   // so the delayed Wiktionary can't come from the offline cache
+  test('a search opened straight from a link shows the Arabic dictionaries without waiting for Wiktionary', async ({ page }) => {
+  await page.route('**/data/wikt.json', async r => { await new Promise(res => setTimeout(res, 4000)); await r.continue(); });
+  await page.goto('/#q=' + encodeURIComponent('التناوش'));
+  await expect(page.locator('main details.ard[data-dict="mukhtar"]')).toBeVisible();
+  await expect(page.locator('main .lead .lead-src').first()).toBeVisible();
+  expect(await page.evaluate(() => W === null)).toBe(true);                // Wiktionary still on its way
+  });
+});
