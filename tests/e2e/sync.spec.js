@@ -67,7 +67,7 @@ test.describe('login sheet', () => {
     const sheet = page.locator('.sheet');
     await expect(sheet.getByRole('heading', { name: 'Choose a username to sync across devices' })).toBeVisible();
     const inp = sheet.locator('#lg-name');
-    await expect(inp).toHaveValue(/^qamus-[a-z0-9]{8}$/);
+    await expect(inp).toHaveValue(/^[a-z]+-\d{4}$/);
     await expect(inp).toBeFocused();
 
     await inp.fill('ab');

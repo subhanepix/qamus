@@ -1,6 +1,6 @@
 # Qamus
 
-Personal Arabic–English dictionary: a static site on GitHub Pages, installed as a PWA on iPad and iPhone, that works offline once loaded.
+Arabic–English dictionary at **https://alqamus.pages.dev**: a static site on Cloudflare Pages, installed as a PWA on iPad and iPhone, that works offline once loaded. (It used to live at `subhanepix.github.io/qamus`; that copy now points people to the new address.)
 
 It does three things:
 - Looks words up in Hans Wehr, a morphological lexicon, Wiktionary and Lane's Lexicon, plus two Arabic–Arabic dictionaries: al-Rāghib's al-Mufradāt and al-Rāzī's Mukhtār al-Ṣiḥāḥ.
@@ -21,7 +21,7 @@ It does three things:
 - **Tap to look up:** tap any Arabic word inside a definition to look it up.
 
 ### Sync, history, vocab, study
-- **Sync:** optional, with a username and no password. Every change is saved to IndexedDB first and synced in the background, so the app never waits on the network. If `SYNC_URL` is empty, the app runs local-only with no login UI.
+- **Sync:** optional, with a username and no password. The sign-in sheet suggests a key-like name (an Arabic word and four digits, like `qalam-4821`) with ↻ and Copy, and nudges names that are easy to guess; any 3–32 letters, digits, `-` or `_` still work. Every change is saved to IndexedDB first and synced in the background, so the app never waits on the network. If `SYNC_URL` is empty, the app runs local-only with no login UI.
 - **History:**
   - recorded each time a result is shown; repeats are deduplicated, and searching again moves a word to the top;
   - the History tab lets you delete entries (swipe or ✕), clear everything, or pause recording;
@@ -35,6 +35,7 @@ It does three things:
   - **Browse** is a flip card with Again / Got it marks, filter chips and Shuffle (after the "دع الأيام Vocabulary" page);
   - **Review** is SM-2 spaced repetition (Again / Hard / Good / Easy) over the cards due today;
   - you can study several folders at once.
+- **First visit:** a short guided tour (welcome, a sample search for كتاب, results, the bookmark, Vocab, Settings), then the sign-in sheet. Skip with Esc; replay from Settings → Help. Runs once per device and never on a link or for someone with history.
 - **Navigation:** Search · Vocab · History tabs, a bottom bar on phones and in the header on iPad. At 900px and wider, a side panel lists recent searches and the folder tree with due counts, and a status bar shows where your data is saved and the keys that work on the current screen. Hash routes: `#q=`, `#e=`, `#f=`, `#w=`, `#vocab`, `#folder=<id>`, `#study=<id,id>&mode=browse|review`, `#history`, `#settings`, `#account`.
 - **Settings** (`#settings`, from the gear beside the search field on the home and result pages; **Back**, Esc or the gear again returns to the search you had open, where you were on the page): turn each dictionary on or off, drag them into the order they show in results (or use the arrow keys on a row's handle), and show or hide the "Parsed" word analysis, and make the text of the English and the Arabic dictionaries larger or smaller, separately (80%–160%). Settings sync with your account. An entry you open directly (from Vocab or a link) always shows, even if its dictionary is off.
 - **Keyboard:**
@@ -48,21 +49,24 @@ It does three things:
    ```bash
    cd worker && npm install
    npx wrangler login
-   npx wrangler kv namespace create QAMUS   # paste the id into wrangler.toml
-   # set ALLOWED_ORIGIN in wrangler.toml to https://<you>.github.io
+   npx wrangler d1 create qamus                       # paste the database_id into wrangler.toml
+   npx wrangler d1 migrations apply qamus --remote    # creates the docs table
+   # set ALLOWED_ORIGIN in wrangler.toml to the site's address(es), comma-separated
    npx wrangler deploy
    ```
 2. **Point the app at it.** In `app.js`, the `SYNC_URL` constant holds the Worker URL, e.g. `https://qamus-sync.<account>.workers.dev`. Leave it empty for a local-only build.
 3. **Bump `VERSION` in `sw.js`** on every deploy, and add any new file to `SHELL`. Open copies show "Qamus was updated · Reload" once the new version has installed.
-4. **Push to GitHub Pages.** Push this folder to `main`, keeping `data/` and `.nojekyll`. Then go to Settings → Pages → *Deploy from a branch* → `main` / root.
-5. **On the iPad:** open the Pages URL in Safari → Share → **Add to Home Screen**. Open it once while online so the data is cached for offline use. Choose a username when asked, and use the same one on your other devices.
+4. **Publish the site:** `npm run deploy:site` copies the site files into `dist/` (`scripts/build-site.sh`, which checks every file `sw.js` caches is there) and uploads them to the Cloudflare Pages project `alqamus`. Also push to `main`: GitHub keeps the code, and the old GitHub Pages copy shows the "new home" notice.
+5. **On the iPad:** open https://alqamus.pages.dev in Safari → Share → **Add to Home Screen**. Open it once while online so the data is cached for offline use. Choose a username when asked, and use the same one on your other devices.
+
+**Capacity.** Sync stores one row per username in Cloudflare D1. The free plan allows about 100,000 rows written a day (one per sync), enough for thousands of daily users. Past that, Workers Paid ($5/month) raises the limits with no code change.
 
 ## Local development
 
 Two dev servers are defined in `.claude/launch.json`:
 ```bash
 node tests/serve.js 8000          # the site: http://127.0.0.1:8000
-npm --prefix worker run dev       # the Worker with a simulated KV: http://localhost:8787
+npm --prefix worker run dev       # the Worker with a local D1 (and simulated KV): http://localhost:8787
 ```
 `SYNC_URL` points at the live Worker, which accepts requests from `localhost` too, so a local copy syncs your real data unless you override it. To use the local Worker instead, run this in the browser console, then reload:
 ```js
@@ -77,7 +81,7 @@ npm install
 npx playwright install chromium   # once, about 150 MB
 npm test                          # unit tests, then the Playwright suite (run before every commit)
 ```
-- **`tests/*.test.js`** (Node's built-in runner): `merge.js` rules and validation, plus the Worker run against an in-memory KV.
+- **`tests/*.test.js`** (Node's built-in runner): `merge.js` rules and validation, plus the Worker run against an in-memory KV and D1 (including accounts that move from KV to D1).
 - **`tests/e2e/*.spec.js`** (Chromium, headless). Playwright starts its own site and Worker servers on ports 8100 and 8788.
 
   | Spec | Covers |
@@ -89,6 +93,7 @@ npm test                          # unit tests, then the Playwright suite (run b
   | `study` | Browse, marks, filters, Review/SM-2, keyboard, swipe, offline |
   | `arabic` | the two Arabic–Arabic dictionaries: sections, highlighting, tap to look up, roots only they have, saving |
   | `settings` | the header gear, the settings page, drag and keyboard reordering, dictionaries on/off, the word-analysis toggle, reset |
+  | `intro` | the first-visit tour, the username suggestions, the old address's "new home" notice |
   | `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
 
 ## Project layout
@@ -98,6 +103,7 @@ npm test                          # unit tests, then the Playwright suite (run b
 | `index.html` | the shell: header with the search field, tabs and account button; the side panel, reading pane and status bar; loads the scripts in order |
 | `app.js` | search and lookup (`norm`, `analyze`, `suggestions`, result views), routing, history, tabs, sheets, login and account |
 | `vocab.js` | cards and folders: bookmarks, save sheet, Vocab and folder views, CSV/JSON import and export |
+| `tour.js` | the first-visit guided tour |
 | `study.js` | study mode: Browse and Review, plus SM-2 `schedule()` |
 | `sync.js` | `QamusStore` (IndexedDB document, falling back to memory) and `QamusSync` (the push/pull loop) |
 | `merge.js` | shared merge and validation, used by both the site and the Worker |
@@ -121,11 +127,13 @@ Each username has one JSON document: `history`, `folders`, `cards`, `reviews` an
 - **Reviews:** per card, the larger `updatedAt` wins. Browse marks live there as `mark` (1 = got it, 2 = again).
 - **History:** each query keeps only its newest entry. Deleting an entry writes a tombstone. "Clear history" sets `settings.historyClearedAt`. At most 500 live entries.
 
-**Limits:** 1 MB per document, 5,000 cards, 500 folders, 60 writes per minute per username (Cloudflare's rate-limiting binding, so each sync costs a single KV write; the free plan allows 1,000 KV writes a day).
+**Storage:** one D1 row per username. Accounts created before the move to D1 are read from the old KV namespace until their next sync writes them to D1, so nobody has to do anything.
+
+**Limits:** 1 MB per document, 5,000 cards, 500 folders, 60 writes per minute per username (Cloudflare's rate-limiting binding, so each sync costs a single D1 write).
 
 **Caveats:**
 - The username is the only secret.
-- Cloudflare KV is eventually consistent. The client re-pushes whenever its merged copy differs from the server's, so a write that's briefly lost heals on the next sync.
+- The client re-pushes whenever its merged copy differs from the server's, so a write that's briefly lost heals on the next sync.
 - A device that stays offline for more than 30 days can bring back items deleted elsewhere.
 
 ## Rebuilding the data

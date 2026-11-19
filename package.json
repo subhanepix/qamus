@@ -4,7 +4,9 @@
   "scripts": {
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "node --test 'tests/*.test.js'",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "build:site": "sh scripts/build-site.sh",
+    "deploy:site": "sh scripts/build-site.sh && npx --prefix worker wrangler pages deploy dist --project-name alqamus --branch main"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1"

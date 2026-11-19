@@ -186,3 +186,63 @@ test('404 for other paths, 405 for other methods', async () => {
   const r = await worker.fetch(req('DELETE', '/u/user1'), env);
   assert.equal(r.status, 405);
 });
+
+// ---------- D1 storage, with accounts from before the move still in KV ----------
+function fakeD1() {
+  const rows = new Map();
+  return {
+    rows,
+    prepare(sql) {
+      return {
+        bind(...a) {
+          return {
+            async first() { return /^SELECT/.test(sql) ? (rows.has(a[0]) ? { doc: rows.get(a[0]).doc } : null) : null; },
+            async run() { if (/^INSERT/.test(sql)) rows.set(a[0], { doc: a[1], updated_at: a[2] }); return { success: true }; },
+          };
+        },
+      };
+    },
+  };
+}
+function d1Env() { const env = makeEnv(); env.DB = fakeD1(); return env; }
+
+test('with D1: new accounts are stored in D1, not KV', async () => {
+  const env = d1Env();
+  let r = await worker.fetch(req('PUT', '/u/qalam-4821', { body: { ...empty(), cards: [card('c1', 5)] } }), env);
+  assert.equal(r.status, 200);
+  assert.equal(env.store.size, 0, 'nothing written to KV');
+  assert.ok(env.DB.rows.has('qalam-4821'));
+  r = await worker.fetch(req('GET', '/u/qalam-4821'), env);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).cards[0].id, 'c1');
+  r = await worker.fetch(req('HEAD', '/u/noor-9037'), env);
+  assert.equal(r.status, 404);
+});
+
+test('with D1: an account saved in KV before the move still loads, and its next sync moves it into D1', async () => {
+  const env = d1Env();
+  env.store.set('user:old-friend', JSON.stringify({ ...empty(), updatedAt: 1, cards: [card('old', 1)] }));
+  let r = await worker.fetch(req('HEAD', '/u/old-friend'), env);
+  assert.equal(r.status, 200, 'still exists');
+  r = await worker.fetch(req('GET', '/u/old-friend'), env);
+  assert.equal((await r.json()).cards[0].id, 'old');
+  r = await worker.fetch(req('PUT', '/u/old-friend', { body: { ...empty(), cards: [card('new', 9)] } }), env);
+  const merged = await r.json();
+  assert.deepEqual(merged.cards.map(c => c.id).sort(), ['new', 'old'], 'merged with the KV copy, nothing lost');
+  assert.ok(env.DB.rows.has('old-friend'), 'now in D1');
+  assert.deepEqual(JSON.parse(env.DB.rows.get('old-friend').doc).cards.map(c => c.id).sort(), ['new', 'old']);
+  env.store.set('user:old-friend', JSON.stringify({ ...empty(), cards: [card('stale', 1)] }));   // D1 wins from now on
+  r = await worker.fetch(req('GET', '/u/old-friend'), env);
+  assert.deepEqual((await r.json()).cards.map(c => c.id).sort(), ['new', 'old']);
+});
+
+test('ALLOWED_ORIGIN can list several sites', async () => {
+  const env = makeEnv();
+  env.ALLOWED_ORIGIN = 'https://alqamus.pages.dev, https://owner.github.io';
+  for (const o of ['https://alqamus.pages.dev', 'https://owner.github.io']) {
+    const r = await worker.fetch(req('OPTIONS', '/u/test-abcd', { origin: o }), env);
+    assert.equal(r.headers.get('Access-Control-Allow-Origin'), o);
+  }
+  const r = await worker.fetch(req('OPTIONS', '/u/test-abcd', { origin: 'https://evil.example' }), env);
+  assert.equal(r.headers.get('Access-Control-Allow-Origin'), null);
+});

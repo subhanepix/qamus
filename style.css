@@ -700,3 +700,43 @@ select.inp { -webkit-appearance: none; appearance: none; padding-right: 32px; cu
 .ub-x { width: 44px; height: 44px; border: 0; background: none; color: var(--muted); font-size: 22px; cursor: pointer; border-radius: var(--r); }
 @media (max-width: 699px) { body.has-tabs:not(.studying) .update-banner { bottom: calc(68px + env(safe-area-inset-bottom, 0px)); } }
 @media (min-width: 900px) { .update-banner { bottom: calc(12px + var(--stat-h)); } }
+
+/* Usernames shown as keys */
+.key-inp { font: 600 17px var(--mono); letter-spacing: .02em; }
+.key-hint { margin: 6px 0 0; min-height: 1.4em; font: 13px var(--ui); color: var(--good); }
+.key-hint.weak { color: var(--again); }
+code.key { padding: 3px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg); font: 600 15px var(--mono); letter-spacing: .02em; }
+.acct-user { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+
+/* First-visit guided tour: the page dims around a spotlight; a card explains the highlighted part */
+#tour { position: fixed; inset: 0; z-index: 60; }
+#tour::before { content: ""; position: absolute; inset: 0; }   /* catches taps on the page while the tour runs */
+#tour.card::before { background: rgba(10, 12, 14, .58); }      /* the welcome and closing cards dim the whole page */
+.tour-hole { position: fixed; border-radius: calc(var(--r) * 1.5); box-shadow: 0 0 0 9999px rgba(10, 12, 14, .58);
+  outline: 2px solid var(--accent); outline-offset: 0; pointer-events: none; transition: left .2s, top .2s, width .2s, height .2s; }
+.tour-hole[hidden] { display: none; }
+.tour-pop { position: fixed; z-index: 1; width: min(360px, calc(100vw - 24px)); padding: 18px 18px 14px; border-radius: calc(var(--r) * 2);
+  background: var(--card); color: var(--ink); box-shadow: 0 12px 40px rgba(0, 0, 0, .35); }
+.tour-pop.center { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(400px, calc(100vw - 32px)); padding: 26px 22px 18px; }
+.tour-pop.busy { opacity: .6; }
+.tour-count { margin: 0 0 4px; font: 600 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.tour-count:empty { display: none; }
+.tour-title { margin: 0; padding-right: 28px; font: 600 20px/1.3 var(--en); }
+.tour-title[lang=ar] { font: 32px/1.6 var(--ar); color: var(--accent); text-align: left; }
+.tour-body { margin: 8px 0 0; font: 15px/1.6 var(--en); color: var(--ink); }
+.tour-body [lang=ar] { font: 21px/1 var(--ar); }
+.tour-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.tour-actions [hidden] { display: none; }
+.tour-x { position: absolute; top: 6px; right: 6px; width: 44px; height: 44px; border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; }
+.tour-x[hidden] { display: none; }
+.tour-x:hover { color: var(--ink); }
+.tour-x:focus-visible, .tour-actions .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .tour-hole { transition: none; } }
+
+/* On the old github.io address: where Qamus lives now */
+.moved { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--accent); border-radius: calc(var(--r) * 2); background: var(--accent-soft); }
+.mv-title { margin: 0; font: 600 16px/1.4 var(--en); }
+.mv-title a { color: var(--accent); }
+.mv-how { margin: 6px 0 2px; font: 14px/1.7 var(--ui); }
+.mv-how .btn { min-height: 32px; padding: 0 8px; }
+.moved a.btn { display: inline-flex; align-items: center; margin-top: 10px; text-decoration: none; font: 600 14px var(--ui); }

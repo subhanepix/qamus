@@ -8,9 +8,19 @@ compatibility_date = "2026-10-01"
 binding = "QAMUS"
 id = "0935be5a50ed43f5981630d0a8d5ef83"
 
+# Synced documents, one row per username (see migrations/). Created with:
+#   npx wrangler d1 create qamus      — then paste the database_id here, and apply the schema:
+#   npx wrangler d1 migrations apply qamus --remote
+# Accounts from before the move are read from the KV namespace above until their next sync.
+[[d1_databases]]
+binding = "DB"
+database_name = "qamus"
+database_id = "853f618e-6961-414d-8dc0-f4c269453152"
+migrations_dir = "migrations"
+
 [vars]
-# The GitHub Pages origin of the site (scheme + host, no path, no trailing slash).
-ALLOWED_ORIGIN = "https://subhanepix.github.io"
+# The site's origins (scheme + host, no path, no trailing slash), comma-separated.
+ALLOWED_ORIGIN = "https://alqamus.pages.dev,https://subhanepix.github.io"
 
 # Per-username write limit (60 a minute), kept out of KV so each sync costs one KV write.
 [[ratelimits]]

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler d1 migrations apply qamus --local && wrangler dev",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

@@ -1,4 +1,6 @@
-// Qamus sync Worker: one KV document per username, merged on every PUT.
+// Qamus sync Worker: one document per username, merged on every PUT.
+// Stored in D1 (table docs) when the DB binding is present; accounts saved before the move to D1 are still in KV
+// (key user:<name>) and are read from there until their next write, which puts them in D1.
 import QamusMerge from '../../merge.js';
 
 const { merge, validateDoc, checkLimits, normUsername, LIMITS } = QamusMerge;
@@ -9,7 +11,9 @@ const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 function corsHeaders(req, env) {
   const origin = req.headers.get('Origin');
   const h = { Vary: 'Origin' };
-  if (origin && (origin === env.ALLOWED_ORIGIN || LOCAL_ORIGIN.test(origin))) {
+  // ALLOWED_ORIGIN may list several sites, comma-separated (the new address and the old one during a move)
+  const allowed = String(env.ALLOWED_ORIGIN || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (origin && (allowed.includes(origin) || LOCAL_ORIGIN.test(origin))) {
     h['Access-Control-Allow-Origin'] = origin;
     h['Access-Control-Allow-Methods'] = 'GET, HEAD, PUT, OPTIONS';
     h['Access-Control-Allow-Headers'] = 'Content-Type';
@@ -33,8 +37,8 @@ async function readBody(req) {
   return { text: new TextDecoder().decode(buf) };
 }
 
-// Rate limiting never touches KV: KV writes are the free plan's tightest limit (1,000/day), so each
-// sync now costs exactly one write. Production uses the Workers rate-limiting binding (WRITES in
+// Rate limiting never touches storage: each sync costs exactly one write (KV's free plan allows 1,000 a day,
+// D1's 100,000 rows written a day). Production uses the Workers rate-limiting binding (WRITES in
 // wrangler.toml). Without it (unit tests, local runtimes lacking the binding) a per-isolate counter
 // gives best-effort limiting.
 const memWindows = new Map();
@@ -54,6 +58,23 @@ async function rateLimited(env, user, now) {
   return 0;
 }
 
+// ---- storage ----
+async function load(env, user) {
+  if (env.DB) {
+    const row = await env.DB.prepare('SELECT doc FROM docs WHERE user = ?1').bind(user).first();
+    if (row) return row.doc;
+  }
+  return env.QAMUS ? env.QAMUS.get('user:' + user) : null;   // not moved to D1 yet (or no D1 at all)
+}
+async function save(env, user, text, now) {
+  if (env.DB) {
+    await env.DB.prepare('INSERT INTO docs (user, doc, updated_at) VALUES (?1, ?2, ?3) ' +
+      'ON CONFLICT(user) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at').bind(user, text, now).run();
+    return;
+  }
+  await env.QAMUS.put('user:' + user, text);
+}
+
 export default {
   async fetch(req, env) {
     const cors = corsHeaders(req, env);
@@ -67,10 +88,9 @@ export default {
     try { raw = decodeURIComponent(m[1]); } catch { raw = ''; }
     const user = normUsername(raw);
     if (!user) return json(400, { error: 'invalid username (3–32 chars, a-z 0-9 _ -)' }, cors);
-    const key = `user:${user}`;
 
     if (req.method === 'GET' || req.method === 'HEAD') {
-      const stored = await env.QAMUS.get(key);
+      const stored = await load(env, user);
       if (stored === null) return json(404, req.method === 'HEAD' ? null : { error: 'no such user' }, cors);
       if (req.method === 'HEAD') return json(200, null, cors);
       return new Response(stored, {
@@ -93,7 +113,7 @@ export default {
       const wait = await rateLimited(env, user, now);
       if (wait) return json(429, { error: 'too many writes, slow down' }, cors, { 'Retry-After': String(wait) });
 
-      const storedText = await env.QAMUS.get(key);
+      const storedText = await load(env, user);
       let stored = null;
       if (storedText !== null) { try { stored = JSON.parse(storedText); } catch { stored = null; } }
       const merged = merge(stored, doc, now);
@@ -102,7 +122,7 @@ export default {
       if (lim2) return json(422, { error: lim2 }, cors);
       const out = JSON.stringify(merged);
       if (new TextEncoder().encode(out).byteLength > LIMITS.bytes) return json(413, { error: 'merged document too large (max 1 MB)' }, cors);
-      await env.QAMUS.put(key, out);
+      await save(env, user, out, now);
       return new Response(out, {
         status: 200,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...cors },

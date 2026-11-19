@@ -29,10 +29,13 @@ function guard(page, errors) {
 const test = base.test.extend({
   // Set to false in a describe block to run the app in local-only mode.
   syncUrl: [SYNC, { option: true }],
+  // The first-visit intro tour is off unless a test turns it on.
+  intro: [false, { option: true }],
   user: async ({}, use) => { await use(randUser()); },
   errors: async ({}, use) => { await use([]); },
-  context: async ({ context, syncUrl }, use) => {
+  context: async ({ context, syncUrl, intro }, use) => {
     await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl || '');
+    if (!intro) await context.addInitScript(() => { try { localStorage.setItem('qamus.introDone', '1'); } catch {} });
     await use(context);
   },
   page: async ({ page, errors }, use) => {
@@ -46,6 +49,7 @@ const test = base.test.extend({
 async function newDevice(browser, { syncUrl = SYNC } = {}) {
   const context = await browser.newContext();
   await context.addInitScript(u => { try { localStorage.setItem('qamus.syncUrl', u); } catch {} }, syncUrl || '');
+  await context.addInitScript(() => { try { localStorage.setItem('qamus.introDone', '1'); } catch {} });
   const page = await context.newPage();
   const errors = [];
   guard(page, errors);

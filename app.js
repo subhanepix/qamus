@@ -260,6 +260,9 @@ function settingsView() {
     <ul class="set-list">${sizeRow('en', 'English dictionaries', 'Hans Wehr, Wiktionary, the lexicon and Lane', 'to write; to record, put down in writing <span class="ar">كَتَبَ</span>')}
       ${sizeRow('ar', 'Arabic dictionaries', 'al-Mufradāt and Mukhtār al-Ṣiḥāḥ', '<span dir="rtl" lang="ar">الْكُتَّابُ بِالضَّمِّ وَالتَّشْدِيدِ الْكَتَبَةُ</span>')}</ul>
     <div class="actions"><button type="button" class="btn quiet" id="set-reset">Reset to defaults</button></div>
+    ${typeof startTour === 'function' ? `<h2 class="sec">Help</h2>
+    <ul class="set-list"><li class="set-row"><span class="set-text"><span class="set-name">The intro tour</span><span class="set-desc">A short walk through searching, saving and studying</span></span>
+      <button type="button" class="btn" id="set-tour">Show the intro again</button></li></ul>` : ''}
     ${Store ? (SYNC_URL ? '<p class="set-note muted">These settings sync to your other devices.</p>' : '') : '<p class="set-note muted">Settings can’t be saved in this preview.</p>'}`);
 }
 main.addEventListener('change', e => {
@@ -273,6 +276,7 @@ main.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.id === 'set-back') return leaveSettings();
+  if (b.id === 'set-tour') { go(''); return setTimeout(() => startTour(), 50); }
   if (b.id === 'set-reset') {
     setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
     $('#set-reset')?.focus();
@@ -499,10 +503,29 @@ function homeStudy() {
     <div class="hs-actions">${dueCards.length ? `<button type="button" class="btn primary" data-go="${esc(studyHash(ids, 'review'))}">Review now</button>` : ''}
       <button type="button" class="btn ${dueCards.length ? 'quiet' : ''}" data-go="vocab">Open Vocab</button></div></section>`;
 }
+// Qamus moved from GitHub Pages to its own address. The old copy says so on its home screen: the browser keeps
+// each address's saved words apart, so synced words come across by signing in there, and words on a device
+// that isn't syncing need sync turned on first.
+const NEW_HOME = 'https://alqamus.pages.dev';
+const OLD_HOME = location.hostname === 'subhanepix.github.io' || !!window.QAMUS_FORCE_MOVED;
+function movedNotice() {
+  if (!OLD_HOME) return '';
+  const user = (SYNC_URL && Sync?.state.user) || '';
+  const how = user
+    ? `Sign in there with <code class="key">${esc(user)}</code> <button type="button" class="btn quiet" id="mv-copy">Copy</button> and your words come with you.`
+    : SYNC_URL ? 'Words saved on this device don’t move by themselves: tap the account button, turn on sync, then sign in there with the same username.'
+      : '';
+  return `<section class="moved" role="status"><p class="mv-title">Qamus has a new home: <a href="${NEW_HOME}/">${NEW_HOME.replace('https://', '')}</a></p>
+    ${how ? `<p class="mv-how">${how}</p>` : ''}<a class="btn primary" href="${NEW_HOME}/">Open the new site</a></section>`;
+}
+main.addEventListener('click', e => {
+  const b = e.target.closest('#mv-copy'); if (!b) return;
+  navigator.clipboard?.writeText(Sync.state.user).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }, () => {});
+});
 function home() {
   view = 'home';
   const h = liveHistory().slice(0, HIST_HOME);
-  main.innerHTML = `${homeStudy()}${welcomeBanner(h[0])}
+  main.innerHTML = `${movedNotice()}${homeStudy()}${welcomeBanner(h[0])}
     ${h.length ? `<div class="sec-row home-recent"><h2 class="sec">Recent searches</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
     <ul class="recent-grid home-recent">${h.map(({ q, t }) => `<li><button type="button" class="recent-tile" data-q="${esc(q)}"><span class="rt-w" ${qAttr(q)}>${esc(q)}</span><span class="rt-t">${relTime(t)}</span></button></li>`).join('')}</ul>` : ''}
     <h2 class="sec">How to search</h2>
@@ -1047,6 +1070,7 @@ const maxT = (hist, q) => hist.reduce((m, h) => (h.q === q && h.t > m ? h.t : m)
 function recordSearch(raw) {
   const q = cleanQ(raw);
   if (!q) return;
+  if (typeof tourOn !== 'undefined' && tourOn) return;   // the intro's sample search isn't yours
   if (!Store) {   // no store (single-file preview): keep the old local list working
     try { const h = legacyHist().filter(x => x !== q); h.unshift(q); localStorage.setItem('hist', JSON.stringify(h.slice(0, 30))); } catch {}
     return;
@@ -1244,11 +1268,19 @@ function relTime(t) {
 
 // ---------- login + account ----------
 const acctEl = $('#acct');
+// Suggested usernames read like a key: an Arabic word and four random digits (qalam-4821).
+// The login itself is unchanged: any 3–32 letters, digits, "-" or "_" still work.
+const NAME_WORDS = ['qalam', 'noor', 'sahab', 'kitab', 'bayt', 'qamar', 'shams', 'najm', 'bahr', 'jabal', 'ward', 'nakhl',
+  'reeh', 'matar', 'nahr', 'sabr', 'fajr', 'layl', 'hilal', 'dalil', 'qafla', 'rihla', 'warqa', 'hikma', 'midad', 'safar',
+  'zaytun', 'rumman', 'tamr', 'asal', 'misk', 'anbar', 'lulu', 'marjan', 'ghazal', 'saqr', 'hudhud', 'bulbul', 'nakhla', 'sidra',
+  'wadi', 'waha', 'sahil', 'bustan', 'manar', 'qubba', 'fanar', 'diwan', 'sirr', 'nasim', 'dima', 'thalj', 'barq', 'ufuq'];
 function randName() {
-  const a = new Uint8Array(8);
+  const a = new Uint32Array(2);
   crypto.getRandomValues(a);
-  return 'qamus-' + [...a].map(b => 'abcdefghijklmnopqrstuvwxyz0123456789'[b % 36]).join('');
+  return NAME_WORDS[a[0] % NAME_WORDS.length] + '-' + (1000 + (a[1] % 9000));
 }
+// A name anyone could type by chance (no digits, or short) gets a gentle nudge, never a block.
+const easyName = n => n.length < 8 || !/\d/.test(n) || /^(test|admin|user|qamus|hello|abc|guest)/.test(n);
 const statusLabel = st => ({
   synced: st.lastSync ? `Synced ${relTime(st.lastSync)}` : 'Synced',
   syncing: 'Syncing…',
@@ -1272,12 +1304,14 @@ function loginSheet({ onClose } = {}) {
   sheet({
     onClose,
     title: 'Choose a username to sync across devices',
-    body: `<p class="muted sheet-note">No password: the username is the key, so pick something hard to guess and use the same one on your other devices.</p>
+    body: `<p class="muted sheet-note">Your username is your key: there's no password, so anyone who types it sees your words. Keep the one we made you, or make your own with a number in it, and use it on your other devices.</p>
       <label class="lbl" for="lg-name">Username</label>
       <div class="field-row">
-        <input id="lg-name" class="inp" value="${randName()}" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" enterkeyhint="go" autofocus>
+        <input id="lg-name" class="inp key-inp" value="${randName()}" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" enterkeyhint="go" autofocus>
         <button type="button" class="btn" id="lg-regen" aria-label="Suggest another username" title="Suggest another">↻</button>
+        <button type="button" class="btn" id="lg-copy" aria-label="Copy username" title="Copy">Copy</button>
       </div>
+      <p class="key-hint" id="lg-hint" aria-live="polite"></p>
       <p class="form-msg" id="lg-msg" role="status" aria-live="polite"></p>
       <div class="actions" id="lg-actions"></div>`,
     onMount(p, api) {
@@ -1321,7 +1355,18 @@ function loginSheet({ onClose } = {}) {
         else if (id === 'lg-change') { idle(); say(''); delete p.dataset.check; inp.focus(); inp.select(); }
         else if (id === 'lg-confirm' && checked) { Sync.signIn(checked); api.close(); }
       });
-      inp.addEventListener('input', () => { if (checked) { idle(); say(''); delete p.dataset.check; } });
+      const hint = p.querySelector('#lg-hint');
+      const showHint = () => {
+        const n = QamusMerge.normUsername(inp.value);
+        hint.className = 'key-hint' + (n && easyName(n) ? ' weak' : '');
+        hint.textContent = !n ? '' : easyName(n) ? 'Easy to guess. Add a few digits, like ' + randName() + '.' : 'Looks unique.';
+      };
+      inp.addEventListener('input', () => { showHint(); if (checked) { idle(); say(''); delete p.dataset.check; } });
+      p.querySelector('#lg-copy').addEventListener('click', async e => {
+        try { await navigator.clipboard.writeText(inp.value.trim()); e.target.textContent = 'Copied'; setTimeout(() => { e.target.textContent = 'Copy'; }, 1500); }
+        catch { inp.select(); }
+      });
+      showHint();
       inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checked ? p.querySelector('#lg-confirm')?.click() : go(); } });
       p.querySelector('#lg-regen').addEventListener('click', () => { inp.value = randName(); inp.dispatchEvent(new Event('input')); inp.focus(); });
       idle();
@@ -1336,7 +1381,9 @@ function accountSheet({ onClose } = {}) {
   let off = null;
   sheet({
     title: 'Account',
-    body: `<p class="acct-user"><span class="muted">Signed in as</span> <b>${esc(st.user)}</b></p>
+    body: `<p class="acct-user"><span class="muted">Signed in as</span> <code class="key">${esc(st.user)}</code>
+        <button type="button" class="btn quiet" id="ac-copy" aria-label="Copy username">Copy</button></p>
+      <p class="muted sheet-note">Type this on your other devices to get the same words. Keep it somewhere safe.</p>
       <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
       <div class="actions" id="ac-main">
         <button type="button" class="btn primary" id="ac-sync">Sync now</button>
@@ -1382,6 +1429,10 @@ function accountSheet({ onClose } = {}) {
       p.addEventListener('click', e => {
         const id = e.target.closest('button')?.id;
         if (id === 'ac-sync') Sync.syncNow();
+        else if (id === 'ac-copy') {
+          const b = e.target.closest('button');
+          navigator.clipboard?.writeText(st.user).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }, () => {});
+        }
         else if (id === 'ac-hist') { go('history'); api.close(); }
         else if (id === 'ac-out') {
           const s = Sync.state;
@@ -1417,7 +1468,15 @@ function initSync() {
     const statEl = $('#statusbar'); if (statEl) statEl.hidden = false;
     renderStat(null);
     refresh();
-    if (!SYNC_URL) return;
+    // First visit: the guided demo, which offers sign-in at the end (instead of the sign-in sheet straight away).
+    // Decided once every script has run: saved data can be ready before tour.js has even downloaded.
+    const offerSignIn = () => { if (SYNC_URL && !Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet(); };
+    const firstRun = () => {
+      if (typeof startTour === 'function' && shouldTour()) startTour({ onDone: ({ signIn }) => { if (signIn) offerSignIn(); } });
+      else offerSignIn();
+    };
+    const afterScripts = fn => (document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
+    if (!SYNC_URL) return afterScripts(firstRun);
     // re-greet on home when the signed-in user changes (sign-in, sign-out)
     const regreet = st => { if (view === 'home' && (st.user || '') !== greetedUser) home(); };
     Sync.on('status', st => { renderAcct(st); regreet(st); });
@@ -1426,7 +1485,7 @@ function initSync() {
     regreet(Sync.state);
     acctEl.hidden = false;
     acctEl.addEventListener('click', () => go('account'));
-    if (!Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet();
+    afterScripts(firstRun);
   });
 }
 
