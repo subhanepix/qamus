@@ -30,8 +30,13 @@ async function load() {
   IDX = await j('data/index.json');
   setStatus('');
   route();
-  const [hw, m] = await Promise.all([j('data/hw.json'), j('data/morph.json')]);
+  // The root lists of Lane and the Arabic dictionaries are small, so they come with the first wave: a search
+  // opened straight from a link then shows those dictionaries at once, without waiting for Wiktionary.
+  const [hw, m, lr, ...ar] = await Promise.all([j('data/hw.json'), j('data/morph.json'), j('data/lane/roots.json').catch(() => []),
+    ...AR_IDS.map(id => j(AR_DICTS[id].dir + 'roots.json').catch(() => []))]);
   HW = hw; M = m;
+  laneRoots = new Set(lr);
+  AR_IDS.forEach((id, i) => { arRoots[id] = new Set(ar[i]); });
   for (const e of HW.entries) {
     byId.set(e[0], e);
     if (!kids.has(e[4])) kids.set(e[4], []);
@@ -45,11 +50,8 @@ async function load() {
   AB = new Set(M.AB); AC = new Set(M.AC); BC = new Set(M.BC);
   for (const r of IDX) if (r[2] === 'l') push(laneIdx, r[0], r[3]);
   route();
-  // second wave: Wiktionary and the Lane root list
-  const [w, lr, ...ar] = await Promise.all([j('data/wikt.json'), j('data/lane/roots.json').catch(() => []),
-    ...AR_IDS.map(id => j(AR_DICTS[id].dir + 'roots.json').catch(() => []))]);
-  laneRoots = new Set(lr);
-  AR_IDS.forEach((id, i) => { arRoots[id] = new Set(ar[i]); });
+  // second wave: Wiktionary
+  const w = await j('data/wikt.json');
   w.entries.forEach((e, k) => {
     push(wForm, norm(e[0]), k);
     if (w.forms[k]) for (const f of w.forms[k].split(' ')) push(wForm, f, k);
@@ -531,7 +533,11 @@ function search(q) {
   // Nothing matched: try the word without a leading ال (or وال, بال…), then without an emphatic ن.
   for (const v of retryForms(q)) {
     const rv = lookupWord(v.word);
-    if (rv) return showRoots(rv.roots, { ...rv.opt, retry: { from: q, ...v } }, v.word);
+    if (!rv) continue;
+    // ال only ever goes on a noun or adjective, so after taking it off, a verb reading can't be right
+    // (التناوش is the noun تَنَاوُش, not the verb تُنَاوِش). The analyser applies the same rule when it reads ال itself.
+    if (v.why === 'al') { rv.opt.parses = rv.opt.parses.filter(isNominal); rv.opt.bwOnly = rv.opt.bwOnly.filter(isNominal); }
+    return showRoots(rv.roots, { ...rv.opt, retry: { from: q, ...v } }, v.word);
   }
   fallback(q, norm(q));
 }
@@ -569,6 +575,7 @@ function lookupWord(q) {
 // 2. (the analysis found nothing too, or we wouldn't be here) without the emphatic نّ: before a pronoun ending
 //    (تغرنكم -> تغركم), then a final ن (ليكتبن -> ليكتب).
 const AL_PREFIXES = ['وال', 'بال', 'فال', 'كال', 'لل', 'ال'];
+const isNominal = a => !/^(PV|IV|CV)/.test(a.stem[1]);   // Buckwalter stem classes: PV/IV/CV are verbs
 const PRON_END = /ن(كما|كم|كن|ك|هما|هم|هن|ها|ه|ني|نا)$/;
 function retryForms(q) {
   const w = q.replace(DIAC, '').replace(/ٱ/g, 'ا'), out = [];
@@ -725,7 +732,13 @@ function showRoots(rootIds, opt, q) {
   });
   if (retry) {
     const why = retry.why === 'al' ? 'without the ال at the start' : 'without the emphatic نّ';
-    h = `<p class="retry-note">No match for <span lang="ar">${esc(retry.from)}</span>. Showing <span lang="ar">${esc(retry.word)}</span>, ${why}.</p>` + h;
+    // A word found only after taking off ال (التناوش) is often a classical noun Hans Wehr doesn't list on its own.
+    // When Hans Wehr doesn't mark it, lead with the sentence the dictionaries themselves give for it.
+    const lead = retry.why === 'al' && !hits.size && !forms.length
+      ? pr.order.filter(id => on(id) && (AR_DICTS[id] ? arKeys[id].length : id === 'lane' && laneWord)) : [];
+    h = `<p class="retry-note">No match for <span lang="ar">${esc(retry.from)}</span>. Showing <span lang="ar">${esc(retry.word)}</span>, ${why}.</p>`
+      + (lead.length ? `<section class="lead" hidden aria-label="What the dictionaries say"></section>` : '') + h;
+    if (lead.length) requestAnimationFrame(() => fillLead(main.querySelector('.lead'), retry, lead, arKeys, laneWord));
   }
   if (hidden) h += `<p class="muted hidden-note">Some results are hidden by your <a href="#settings" data-go="settings">dictionary settings</a>.</p>`;
   main.innerHTML = h || '<p class="muted">Nothing found.</p>';
@@ -733,7 +746,7 @@ function showRoots(rootIds, opt, q) {
   main.querySelectorAll('details.lane[open]').forEach(fillLane);
   main.querySelectorAll('details.ard[open]').forEach(fillAr);
   const first = main.querySelector('.word.hit, .forms tr.hit');
-  if (first) requestAnimationFrame(() => first.scrollIntoView({ block: 'center' }));
+  if (first && !main.querySelector('.lead')) requestAnimationFrame(() => first.scrollIntoView({ block: 'center' }));
   else window.scrollTo(0, 0);
 }
 function uniqParses(ps) {
@@ -808,8 +821,28 @@ async function fillLane(d) {
       return `<div class="word lane-entry ${hit ? 'hit' : ''}">${SB({ s: 'lane', r: k + ':' + i }, w)}<span class="def">${defHtml(def, ['i', 'br', 'table', 'tbody', 'tr', 'td', 'center'])}</span></div>`;
     }).join('') : '<p class="muted">No entries.</p>';
     if (hasVocab()) markSaved(body);
-    const hit = body.querySelector('.hit'); if (hit) hit.scrollIntoView({ block: 'center' });
+    // The word may only come up inside another entry's text (تناوش under نَاشَهُ): mark that mention and go to it.
+    if (lastLaneWord && !body.querySelector('.hit')) markLaneMention(body, lastLaneWord);
+    const hit = body.querySelector('mark.lane-hit') || body.querySelector('.hit');
+    // with a lead at the top, the page stays there until you ask for Lane's full entry from it
+    if (hit && (!main.querySelector('.lead') || d.dataset.fromLead)) hit.scrollIntoView({ block: 'center' });
   } catch (err) { body.textContent = 'Couldn’t load Lane’s entry. Check your connection and try again.'; delete d.dataset.filled; }
+}
+// The first tappable Arabic word in a Lane entry that stands for w gets a <mark>, and its entry is marked as the hit.
+function markLaneMention(body, w) {
+  for (const span of body.querySelectorAll('.lane-entry .def .lk')) {
+    const words = span.textContent.split(/(\s+)/);
+    const i = words.findIndex(t => t.trim() && tokenIs(t, w));
+    if (i < 0) continue;
+    span.textContent = '';
+    words.forEach((t, j) => {
+      if (j !== i) return span.append(t);
+      const m = document.createElement('mark'); m.className = 'lane-hit'; m.textContent = t; span.append(m);
+    });
+    span.closest('.lane-entry').classList.add('hit');
+    return true;
+  }
+  return false;
 }
 // ---------- Arabic–Arabic dictionaries (OpenITI texts, one file per first letter, loaded on demand) ----------
 const AR_DICTS = {
@@ -879,6 +912,75 @@ async function fillAr(d) {
     if (hasVocab()) markSaved(body);
   } catch (err) { body.textContent = 'Couldn’t load this entry. Check your connection and try again.'; delete d.dataset.filled; }
 }
+// ---------- the lead: a word's own sentence from the dictionaries ----------
+// Does a word in running text stand for w? Allows ال and a joined و/ف/ب/ك/ل in front (التناوش, وتناوش).
+const tokenIs = (tok, w) => {
+  const t = norm(tok).replace(/[^ء-ي]/g, '');
+  return t === w || ['ال', 'وال', 'فال', 'بال', 'كال', 'لل', 'و', 'ف'].some(p => t === p + w);
+};
+// The stretch of text around the first mention of w (preferring the exact form typed), cut at word edges.
+function snippet(text, w, exact, before, after, stop = /[.؟!\n]/) {
+  const re = /[ء-ْٰ]+/g;
+  let m, at = -1, len = 0;
+  while ((m = re.exec(text))) {
+    const t = norm(m[0]).replace(/[^ء-ي]/g, '');
+    if (exact && t === exact) { at = m.index; len = m[0].length; break; }
+    if (at < 0 && tokenIs(m[0], w)) { at = m.index; len = m[0].length; }
+  }
+  if (at < 0) return null;
+  let s = Math.max(0, at - before), e = Math.min(text.length, at + len + after);
+  // stop at a full stop or line break before or after the word, so the snippet starts and ends where a sentence does
+  for (let i = at - 1; i >= s; i--) if (stop.test(text[i])) { s = i + 1; break; }
+  for (let i = at + len; i < e; i++) if (stop.test(text[i])) { e = i + 1; break; }
+  if (s > 0 && s !== at) { const sp = text.indexOf(' ', s); if (sp >= 0 && sp < at) s = sp + 1; }
+  if (e < text.length) { const sp = text.lastIndexOf(' ', e); if (sp > at + len) e = sp; }
+  return { pre: (s > 0 && !stop.test(text[s - 1]) ? '…' : '') + text.slice(s, at), hit: text.slice(at, at + len),
+    post: text.slice(at + len, e).trimEnd() + (e < text.length && !stop.test(text[e - 1]) ? '…' : '') };
+}
+const htmlText = html => { const d = document.createElement('div'); d.innerHTML = html.replace(/<br\s*\/?>/g, '\n'); return d.textContent.replace(/[ \t]+/g, ' ').trim(); };
+
+async function fillLead(el, retry, ids, arKeys, laneWord) {
+  if (!el) return;
+  const w = norm(retry.word), exact = norm(retry.from);
+  const found = [];
+  for (const id of [...ids.filter(id => AR_DICTS[id]), ...ids.filter(id => !AR_DICTS[id])]) {   // Arabic dictionaries first
+    try {
+      if (AR_DICTS[id]) {
+        for (const k of arKeys[id]) {
+          const items = (await arShard(id, k))[k] || [];
+          const sn = items.map(htmlText).map(t => snippet(t, w, exact, 70, 150)).find(Boolean);
+          if (sn) { found.push({ id, sn, ar: true }); break; }
+        }
+      } else if (id === 'lane' && !found.length) {   // Lane only when no Arabic dictionary has the word
+        for (const k of laneIdx.get(laneWord) || []) {
+          const key = laneKey(k); if (!key) continue;
+          const name = key.codePointAt(0).toString(16).padStart(4, '0') + '.json';
+          if (!laneShards.has(name)) laneShards.set(name, fetch('data/lane/' + name).then(r => { if (!r.ok) throw new Error(name); return r.json(); }));
+          const items = (await laneShards.get(name))[key] || [];
+          const sn = items.map(([, def]) => htmlText(def)).map(t => snippet(t, w, '', 260, 40, /\n/)).find(Boolean);
+          if (sn) { found.push({ id, sn, ar: false }); break; }
+        }
+      }
+    } catch { /* a shard that won't load just leaves that dictionary out of the lead */ }
+    if (found.length >= 2) break;
+  }
+  if (!el.isConnected || !found.length) return;
+  el.innerHTML = found.map(({ id, sn, ar }) => `<div class="lead-item">
+    <p class="lead-text${ar ? '' : ' lead-en'}" ${ar ? 'lang="ar" dir="rtl"' : ''}>${esc(sn.pre)}<mark lang="ar">${esc(sn.hit)}</mark>${esc(sn.post)}</p>
+    <button type="button" class="lead-src" data-src="${id}">${id === 'lane' ? 'Lane’s Lexicon' : AR_DICTS[id].name} · full entry</button></div>`).join('');
+  el.hidden = false;
+  el.addEventListener('click', e => {
+    const b = e.target.closest('.lead-src'); if (!b) return;
+    const d = main.querySelector(b.dataset.src === 'lane' ? 'details.lane' : `details.ard[data-dict="${b.dataset.src}"]`);
+    if (!d) return;
+    const filled = d.dataset.filled;
+    d.dataset.fromLead = '1';
+    d.open = true;   // the toggle listener fills it, and Lane then scrolls to the word itself
+    if (b.dataset.src !== 'lane') d.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    else if (filled) (d.querySelector('mark.lane-hit, .hit') || d).scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
+}
+
 function stripHead(e) { const d = e[2]; return d.startsWith(e[1]) ? d.slice(e[1].length).trim() : d; }
 function plain(s) { return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
 function defHtml(s, tags = ['b', 'i']) {

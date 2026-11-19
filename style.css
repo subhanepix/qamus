@@ -327,6 +327,16 @@ details.ard .ard-body { border-top: 1px solid var(--line); }
 .hidden-note { margin: 14px 0 0; font: 13px var(--ui); }
 .retry-note { margin: 14px 0 4px; padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--accent-soft); font: 14px/1.6 var(--ui); }
 .retry-note [lang=ar] { font: 21px/1 var(--ar); }
+/* the lead: the dictionaries' own sentence for a word Hans Wehr doesn't list on its own */
+.lead { margin: 10px 0 6px; border-bottom: 1px solid var(--line); }
+.lead-item { padding: 8px 0 10px; }
+.lead-item + .lead-item { border-top: 1px solid var(--line); }
+.lead-text { margin: 0; font: calc(22px * var(--t-ar))/1.9 var(--ar); text-align: right; overflow-wrap: anywhere; }
+.lead-text.lead-en { font: calc(16px * var(--t-en))/1.6 var(--en); text-align: left; }
+.lead-text.lead-en [lang=ar] { font: calc(21px * var(--t-ar))/1.4 var(--ar); }
+.lead-text mark, mark.lane-hit { background: var(--hl); color: inherit; border-radius: 2px; padding: 0 2px; }
+.lead-src { display: block; margin: 4px 0 0; padding: 6px 0; min-height: 32px; border: 0; background: none; cursor: pointer;
+  font: 600 13px var(--ui); color: var(--accent); }
 
 /* ---------- account button, sheets, forms ---------- */
 .acct { flex: none; position: relative; display: flex; align-items: center; gap: 8px; height: 44px; min-width: 44px;
