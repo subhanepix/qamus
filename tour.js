@@ -28,7 +28,17 @@ function startTour({ onDone } = {}) {
     { before: async () => { go({ q: 'كتاب' }); await wait(() => visible('main .word.hit')); },
       target: () => visible('main .word.hit') || visible('main details.root'), title: 'Results by root', body: 'Words are grouped under their root, and the one you searched is highlighted. Tap any Arabic word in a definition to look it up.' },
     { target: () => visible('main .word.hit > .save-btn') || visible('main .save-btn'), title: 'Save words', body: 'The bookmark saves a word to a folder, with its meaning and root filled in.' },
-    { target: () => visible('#tabs [data-tab="vocab"]'), title: 'Study them', body: 'Your saved words live in Vocab. Study them as flashcards: browse, or let spaced review pick what’s due.' },
+    { target: () => visible('#tabs [data-tab="vocab"]'), title: 'Study them', body: 'Your saved words live in Vocab, in folders you make. Open a folder to study it, or review everything that’s due.' },
+    // A working sample flashcard, so a new user sees review before they've saved anything (nothing is stored)
+    { center: true, title: 'Flashcards, like Anki', body: 'Tap the card to see the meaning, then say how well you knew it. Spaced review brings each word back just before you’d forget it.',
+      extra: () => `<div class="tf">
+        <button type="button" class="tf-card" id="tf-card" aria-pressed="false" aria-label="Sample flashcard: كِتَاب. Tap to show the meaning.">
+          <span class="tf-face tf-front"><span class="tf-w" lang="ar">كِتَاب</span><small>Tap to show the meaning</small></span>
+          <span class="tf-face tf-back"><span class="tf-gl">book; piece of writing, letter</span><small>root <span lang="ar">ك ت ب</span> · pl. <span lang="ar">كُتُب</span></small></span>
+        </button>
+        <div class="tf-grades" id="tf-grades" hidden>${['Again', 'Hard', 'Good', 'Easy'].map((g, k) =>
+          `<button type="button" class="tf-g" data-g="${k}">${g}<small>${typeof intervalLabel === 'function' ? intervalLabel(null, k) : ['<10m', '1d', '1d', '4d'][k]}</small></button>`).join('')}</div>
+        <p class="tf-note" id="tf-note" aria-live="polite"></p></div>` },
     { target: () => visible('#settings-btn'), title: 'Make it yours', body: 'Turn dictionaries on or off, put them in your order, and change the text size.' },
     sync
       ? { card: true, before: async () => { go(''); }, title: 'Keep your words everywhere', body: 'Pick a username to sync your words across your devices. No password: we’ll suggest one that’s hard to guess.', next: 'Choose a username', back: 'Maybe later', last: true }
@@ -39,7 +49,7 @@ function startTour({ onDone } = {}) {
   root.id = 'tour';
   root.innerHTML = `<div class="tour-hole" aria-hidden="true"></div>
     <div class="tour-pop" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body">
-      <p class="tour-count"></p><h2 id="tour-title" class="tour-title"></h2><p id="tour-body" class="tour-body"></p>
+      <p class="tour-count"></p><h2 id="tour-title" class="tour-title"></h2><p id="tour-body" class="tour-body"></p><div id="tour-extra"></div>
       <div class="tour-actions"><button type="button" class="btn quiet" id="tour-back"></button><button type="button" class="btn primary" id="tour-next"></button></div>
       <button type="button" class="tour-x" id="tour-skip" aria-label="Skip the tour">✕</button></div>`;
   document.body.appendChild(root);
@@ -92,13 +102,14 @@ function startTour({ onDone } = {}) {
       pop.classList.remove('busy');
       pop.querySelectorAll('button').forEach(b => { b.disabled = false; });
     }
-    target = s.card ? null : (s.target?.() || null);
+    target = s.card || s.center ? null : (s.target?.() || null);
     if (target) target.scrollIntoView({ block: 'center', behavior: 'instant' });
     const n = STEPS.filter(x => !x.card).length, pos = STEPS.slice(0, i + 1).filter(x => !x.card).length;
     root.querySelector('.tour-count').textContent = s.card ? '' : `${pos} of ${n}`;
     root.querySelector('#tour-title').innerHTML = s.title;
     root.querySelector('#tour-title').lang = /[؀-ۿ]/.test(s.title) && !/[a-z]/i.test(s.title) ? 'ar' : '';
     root.querySelector('#tour-body').innerHTML = s.body;
+    root.querySelector('#tour-extra').innerHTML = s.extra ? s.extra() : '';
     const back = root.querySelector('#tour-back'), next = root.querySelector('#tour-next');
     next.textContent = s.next || 'Next';
     back.textContent = s.back || 'Back';
@@ -119,6 +130,24 @@ function startTour({ onDone } = {}) {
   };
   root.addEventListener('click', e => {
     const id = e.target.closest('button')?.id;
+    // the sample flashcard: flip, then grade
+    if (id === 'tf-card') {
+      const c = e.target.closest('#tf-card'), on = c.getAttribute('aria-pressed') !== 'true';
+      c.setAttribute('aria-pressed', String(on));
+      c.classList.toggle('flipped', on);
+      root.querySelector('#tf-grades').hidden = !on;
+      place();
+      return;
+    }
+    const g = e.target.closest('[data-g]');
+    if (g) {
+      const k = +g.dataset.g;
+      root.querySelectorAll('.tf-g').forEach(b => b.setAttribute('aria-pressed', String(b === g)));
+      root.querySelector('#tf-note').innerHTML = ['Again: you’ll see <span lang="ar">كِتَاب</span> again in a few minutes.',
+        'Hard: it comes back tomorrow.', 'Good: it comes back tomorrow, then less and less often.', 'Easy: it comes back in a few days.'][k];
+      place();
+      return;
+    }
     const s = STEPS[i];
     if (id === 'tour-skip') finish(false);
     else if (id === 'tour-next') s.last ? finish(sync) : show(i + 1);

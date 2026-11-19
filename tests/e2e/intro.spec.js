@@ -13,7 +13,7 @@ test.describe('intro tour (local)', () => {
     await expect(page.locator('#tour-title')).toHaveText('أهلًا وسهلًا');
     await expect(next(page)).toBeFocused();
     await next(page).click();                                                   // Show me
-    await expect(page.locator('#tour .tour-count')).toHaveText('1 of 5');
+    await expect(page.locator('#tour .tour-count')).toHaveText('1 of 6');
     await expect(page.locator('#tour-title')).toHaveText('Search anything');
     const hole = await page.locator('.tour-hole').boundingBox(), q = await page.locator('#q').boundingBox();
     expect(Math.abs(hole.x + hole.width / 2 - (q.x + q.width / 2))).toBeLessThan(2);   // spotlight sits on the search field
@@ -21,9 +21,25 @@ test.describe('intro tour (local)', () => {
     await expect(page.locator('#tour-title')).toHaveText('Results by root');
     await expect(page).toHaveURL(/#q=/);
     await expect(page.locator('main .word.hit').first()).toBeVisible();
-    for (const t of ['Save words', 'Study them', 'Make it yours']) { await next(page).click(); await expect(page.locator('#tour-title')).toHaveText(t); }
+    for (const t of ['Save words', 'Study them']) { await next(page).click(); await expect(page.locator('#tour-title')).toHaveText(t); }
+    await next(page).click();
+    await expect(page.locator('#tour-title')).toHaveText('Flashcards, like Anki');
+    await expect(page.locator('#tour .tour-count')).toHaveText('5 of 6');
+    const card = page.locator('#tf-card');
+    await expect(card).toContainText('كِتَاب');
+    await expect(page.locator('#tf-grades')).toBeHidden();
+    await card.click();                                                         // flip
+    await expect(card).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.tf-back')).toContainText('book');
+    await expect(page.locator('.tf-g')).toHaveText([/^Again/, /^Hard/, /^Good/, /^Easy/]);
+    await expect(page.locator('.tf-g[data-g="3"] small')).toHaveText('4d');     // the real review schedule
+    await page.locator('.tf-g[data-g="2"]').click();
+    await expect(page.locator('#tf-note')).toContainText('Good: it comes back tomorrow');
+    expect(await page.evaluate(() => [QamusStore.doc.cards.length, Object.keys(QamusStore.doc.reviews).length])).toEqual([0, 0]);   // nothing saved
+    await next(page).click();
+    await expect(page.locator('#tour-title')).toHaveText('Make it yours');
     await page.locator('#tour-back').click();
-    await expect(page.locator('#tour-title')).toHaveText('Study them');
+    await expect(page.locator('#tour-title')).toHaveText('Flashcards, like Anki');
     await next(page).click(); await next(page).click();
     await expect(page.locator('#tour-title')).toHaveText('That’s it');
     await expect(page.locator('main .welcome')).toBeVisible();                 // back home for the last card
@@ -62,13 +78,14 @@ test.describe('intro tour (local)', () => {
       await page.setViewportSize({ width: 390, height: 780 });
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto('/');
-      for (let k = 0; k < 7; k++) {
+      for (let k = 0; k < 8; k++) {
         await expect(pop(page)).toBeVisible();
         const b = await pop(page).boundingBox();
         expect(b.x).toBeGreaterThanOrEqual(0); expect(b.x + b.width).toBeLessThanOrEqual(390);
         expect(b.y).toBeGreaterThanOrEqual(0); expect(b.y + b.height).toBeLessThanOrEqual(780);
         for (const h of await page.locator('#tour button:visible').evaluateAll(bs => bs.map(x => x.getBoundingClientRect().height))) expect(h).toBeGreaterThanOrEqual(44);
-        if (k < 6) await next(page).click();
+        if (k === 5) { await page.locator('#tf-card').click(); await expect(page.locator('#tf-grades')).toBeVisible(); }   // flipped: the tallest step
+        if (k < 7) await next(page).click();
       }
     });
   }
@@ -81,7 +98,7 @@ test.describe('intro tour (synced)', () => {
     await page.goto('/');
     await expect(pop(page)).toBeVisible();
     await expect(page.locator('.sheet')).toHaveCount(0);                        // not both at once
-    for (const t of ['Search anything', 'Results by root', 'Save words', 'Study them', 'Make it yours', 'Keep your words everywhere']) {
+    for (const t of ['Search anything', 'Results by root', 'Save words', 'Study them', 'Flashcards, like Anki', 'Make it yours', 'Keep your words everywhere']) {
       await next(page).click();
       await expect(page.locator('#tour-title')).toHaveText(t);
     }
