@@ -71,8 +71,8 @@ test.describe('study (local)', () => {
     await expect(meta(page)).toHaveText('3 / 3');
     await expect(page.locator('#st-tally')).toContainText('1 got it');
     await expect(page.locator('#st-tally')).toContainText('1 again');
-    expect((await review(page, 'c1')).mark).toBe(1);
-    expect((await review(page, 'c2')).mark).toBe(2);
+    await expect.poll(async () => (await review(page, 'c1'))?.mark).toBe(1);
+    await expect.poll(async () => (await review(page, 'c2'))?.mark).toBe(2);
 
     await page.locator('#st-prev').click();
     await expect(page.locator('.st-front .st-badge')).toHaveText('Again');
@@ -87,7 +87,7 @@ test.describe('study (local)', () => {
     await page.reload();
     await page.evaluate(() => QamusStore.init());
     await expect(meta(page)).toHaveText('2 / 3');                                // current card remembered
-    expect((await review(page, 'c1')).mark).toBe(1);
+    await expect.poll(async () => (await review(page, 'c1'))?.mark).toBe(1);
   });
 
   test('filters: only again / hide got it (exclusive), folder chips, remembered', async ({ page }) => {
@@ -133,7 +133,7 @@ test.describe('study (local)', () => {
     await page.getByRole('button', { name: 'Clear all marks' }).click();
     await expect(page.locator('.st-confirm')).toContainText('Clear every mark?');
     await page.getByRole('button', { name: 'Keep' }).click();
-    expect((await review(page, 'c1')).mark).toBe(1);
+    await expect.poll(async () => (await review(page, 'c1'))?.mark).toBe(1);
     await page.getByRole('button', { name: 'Clear all marks' }).click();
     await page.getByRole('button', { name: 'Clear', exact: true }).click();
     await expect(page.locator('#st-tally')).toContainText('0 got it');
@@ -170,7 +170,7 @@ test.describe('study (local)', () => {
 
     await page.locator('#st-show').click();
     await page.locator('#st-g3').click();                                          // Easy
-    expect((await review(page, 'c3')).interval).toBe(4);
+    await expect.poll(async () => (await review(page, 'c3'))?.interval).toBe(4);
     await expect(page.locator('.st-front .st-word')).toHaveText('دَعْ');
     await page.locator('#st-show').click();
     await page.keyboard.press('3');                                                // Good via keyboard
@@ -223,10 +223,10 @@ test.describe('study (local)', () => {
   test('keyboard marks in browse; swipe moves without flipping', async ({ page }) => {
     await boot(page); await seed(page); await study(page, ['f_a']);
     await page.keyboard.press('2');
-    expect((await review(page, 'c1')).mark).toBe(1);
+    await expect.poll(async () => (await review(page, 'c1'))?.mark).toBe(1);
     await expect(meta(page)).toHaveText('2 / 3');
     await page.keyboard.press('1');
-    expect((await review(page, 'c2')).mark).toBe(2);
+    await expect.poll(async () => (await review(page, 'c2'))?.mark).toBe(2);
     await expect(meta(page)).toHaveText('3 / 3');
 
     await page.keyboard.press('ArrowLeft');

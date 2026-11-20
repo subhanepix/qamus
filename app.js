@@ -32,9 +32,13 @@ async function load() {
   route();
   // The root lists of Lane and the Arabic dictionaries are small, so they come with the first wave: a search
   // opened straight from a link then shows those dictionaries at once, without waiting for Wiktionary.
-  const [hw, m, lr, ...ar] = await Promise.all([j('data/hw.json'), j('data/morph.json'), j('data/lane/roots.json').catch(() => []),
+  // Hans Wehr comes as its headwords only (data/hw/index.json); definitions arrive in chunks of roots (loadHw).
+  // The word analyser (morph.json, the biggest file) doesn't hold up results for words Hans Wehr has directly:
+  // it comes next, and a result already on screen is redrawn with the analysis if you haven't scrolled.
+  const [hi, lr, ...ar] = await Promise.all([j('data/hw/index.json'), j('data/lane/roots.json').catch(() => []),
     ...AR_IDS.map(id => j(AR_DICTS[id].dir + 'roots.json').catch(() => []))]);
-  HW = hw; M = m;
+  HW = { entries: hi.e.map(([id, w, isRoot, root, quran, tr]) => [id, w, null, isRoot, root, quran, tr]),
+    forms: hi.f.map(([root, n, verb]) => [root, n, verb, null]), chunks: hi.chunks };
   laneRoots = new Set(lr);
   AR_IDS.forEach((id, i) => { arRoots[id] = new Set(ar[i]); });
   for (const e of HW.entries) {
@@ -47,9 +51,14 @@ async function load() {
     push(formsBy, f[0], f);
     if (f[2]) push(formNorm, norm(f[2]), f);
   });
-  AB = new Set(M.AB); AC = new Set(M.AC); BC = new Set(M.BC);
   for (const r of IDX) if (r[2] === 'l') push(laneIdx, r[0], r[3]);
   route();
+  // One download at a time on a slow connection: the chunk for what's on screen goes before the analyser.
+  await Promise.allSettled([...hwChunks.values()]);
+  const m = await j('data/morph.json');
+  AB = new Set(m.AB); AC = new Set(m.AC); BC = new Set(m.BC);
+  M = m;
+  if (main.dataset.empty === '1' || view === 'loading' || (view === 'result' && window.scrollY < 80)) route();
   // second wave: Wiktionary
   const w = await j('data/wikt.json');
   w.entries.forEach((e, k) => {
@@ -58,12 +67,53 @@ async function load() {
   });
   W = w;
   if (main.dataset.empty === '1') route();   // a search that found nothing may succeed now
+  prefetchHw();
+}
+
+// ---------- Hans Wehr definitions, loaded by chunk (data/hw/cNNN.json, ~200 roots each) ----------
+const hwChunks = new Map();   // chunk number -> Promise (resolved once its definitions are filled in)
+function chunkOf(rootId) {
+  const c = HW.chunks; let lo = 0, hi = c.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (c[mid] <= rootId) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+function loadChunk(k) {
+  if (!hwChunks.has(k)) hwChunks.set(k, fetch(`data/hw/c${String(k).padStart(3, '0')}.json`)
+    .then(r => { if (!r.ok) throw new Error('hw chunk ' + k); return r.json(); })
+    .then(c => {
+      for (const id in c.e) { const e = byId.get(+id); if (e) e[2] = c.e[id]; }
+      for (const i in c.f) { const f = HW.forms[+i]; if (f) f[3] = c.f[i]; }
+      plainDefs = null;
+    })
+    .catch(err => { hwChunks.delete(k); throw err; }));
+  return hwChunks.get(k);
+}
+const hwChunksFor = rootIds => [...new Set(rootIds.filter(r => r != null).map(chunkOf))];
+const hwHave = rootIds => hwChunksFor(rootIds).every(k => hwChunks.get(k)?.done);
+function loadHw(rootIds) {
+  return Promise.all(hwChunksFor(rootIds).map(k => loadChunk(k).then(() => { hwChunks.get(k).done = true; })));
+}
+const loadAllHw = () => loadHw(HW.chunks.map(start => start));
+// After the first visit has everything it needs, fetch the remaining chunks quietly so the offline copy fills up
+// (unless the device asks to save data). The service worker caches each one as it arrives.
+function prefetchHw() {
+  if (navigator.connection?.saveData) return;
+  const idle = window.requestIdleCallback || (f => setTimeout(f, 300));
+  let k = 0;
+  const next = () => {
+    while (k < HW.chunks.length && hwChunks.get(k)?.done) k++;
+    if (k >= HW.chunks.length) return;
+    const n = k++;
+    loadChunk(n).then(() => { hwChunks.get(n).done = true; }, () => {}).then(() => idle(next));
+  };
+  setTimeout(() => idle(next), 3000);
 }
 const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
 const setStatus = t => { const s = $('#status'); if (s) s.textContent = t; };
 
 // ---------- morphology (Buckwalter) ----------
 function analyze(w) {
+  if (!M) return [];   // still downloading: results show what the dictionaries have directly, then redraw
   const n = norm(w), out = [], seen = new Set();
   for (let i = 0; i <= Math.min(5, n.length - 1); i++) {
     const P = M.prefixes[n.slice(0, i)]; if (!P) continue;
@@ -91,8 +141,52 @@ function analyze(w) {
     else for (let i = 0; i < raw.length; i++) if ('أإآءؤئى'.includes(raw[i]) && c[i] !== raw[i]) pen++;
     a.pen = pen;
   }
-  out.sort((a, b) => a.pen - b.pen || a.affixLen - b.affixLen);
+  // Ties (same spelling fit, same affixes) go first to a word Hans Wehr also has, then to the root that occurs
+  // most in the Qur'an. So المؤمنين reads as مُؤْمِن "believer" (Hans Wehr's mu'min), not مُؤَمِّن "guarantor".
+  for (const a of out) {
+    a.hw = hwHasWord(a.stem);
+    a.qc = Math.max(0, ...a.stem[5].map(id => byId.get(id)?.[5] || 0));
+  }
+  out.sort((a, b) => a.pen - b.pen || a.affixLen - b.affixLen || a.hw - b.hw || b.qc - a.qc);
   return out;
+}
+// A rough Latin spelling of a vowelled Arabic word, comparable with latin() of Hans Wehr's transliterations:
+// مُؤْمِن -> "mumin" (Hans Wehr: mu'min), مُؤَمِّن -> "muammin", كِتَاب -> "kitab".
+const AR_LAT = { 'ب': 'b', 'ت': 't', 'ث': 't', 'ج': 'j', 'ح': 'h', 'خ': 'k', 'د': 'd', 'ذ': 'd', 'ر': 'r', 'ز': 'z', 'س': 's', 'ش': 's',
+  'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z', 'غ': 'g', 'ف': 'f', 'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h' };
+function vocLatin(w) {
+  let out = '', prev = '';
+  for (const c of w) {
+    if (c === '\u064E') out += 'a'; else if (c === '\u0650') out += 'i'; else if (c === '\u064F') out += 'u';
+    else if (c === '\u0651') out = /[aiu]$/.test(out) ? out.slice(0, -1) + prev + out.slice(-1) : out + prev;   // shadda doubles the consonant (it may follow the vowel mark)
+    else if (c === 'ا' || c === 'ى' || c === 'آ') out += 'a';
+    else if (c === 'و') out += /[u]$/.test(out) ? 'u' : 'w';
+    else if (c === 'ي') out += /[i]$/.test(out) ? 'i' : 'y';
+    else if (c === 'ة') out += /a$/.test(out) ? '' : 'a';
+    else if (AR_LAT[c]) { out += AR_LAT[c]; prev = AR_LAT[c]; continue; }
+    // hamza, ʿayn, sukūn, tanwīn and anything else add nothing
+  }
+  return out.replace(/([aiu])\1+/g, '$1');                         // long vowels as short, like latin()
+}
+let hwLat = null;   // root id -> Map(latin() spelling, final vowel dropped -> 0 own entry | 1 inside a phrase)
+const trimV = s => s.replace(/[aiu]+$/, '');
+// 0: Hans Wehr has the word as an entry of its own; 1: only inside a phrase (مؤمن عليه mu'amman 'alaihi); 2: not at all
+function hwHasWord(stem) {
+  if (!HW || !stem[5].length) return 2;
+  if (!hwLat) {
+    hwLat = new Map();
+    for (const e of HW.entries) if (e[6]) {
+      if (!hwLat.has(e[4])) hwLat.set(e[4], new Map());
+      const m = hwLat.get(e[4]), single = !/\s/.test(e[1].trim());
+      String(e[6]).split(/[,;/]| or /).forEach((t, i) => {
+        const l = trimV(latin(t)); if (!l) return;
+        const sc = single && i === 0 && !/\s/.test(t.trim()) ? 0 : 1;
+        if (!m.has(l) || m.get(l) > sc) m.set(l, sc);
+      });
+    }
+  }
+  const v = trimV(vocLatin(stem[4] || stem[0]));
+  return Math.min(2, ...stem[5].map(id => hwLat.get(id)?.get(v) ?? 2));
 }
 
 // ---------- autocomplete ----------
@@ -124,14 +218,21 @@ function latinSuggest(q) {
 }
 function glossFor(r) {
   if (!HW) return '';
+  if ((r[2] === 'h' || r[2] === 'f') && !hwHave([r[2] === 'h' ? byId.get(+r[3])?.[4] : HW.forms[+r[3]]?.[0]])) refillSuggest(r);
   if (r[2] === 'h') { const e = byId.get(+r[3]); if (!e) return ''; let d = plain(stripHead(e)); if (e[6] && d.startsWith(e[6])) d = d.slice(e[6].length).trim(); return (e[6] ? e[6] + ' · ' : '') + d.slice(0, 80); }
-  if (r[2] === 'f') { const f = HW.forms[+r[3]]; return 'Form ' + f[1] + ' · ' + plain(f[3]).slice(0, 70); }
-  if (r[2] === 'b') { const s = (M.stems[r[3]] || [])[0]; return s ? s[2].replace(/;/g, '; ') : ''; }
+  if (r[2] === 'f') { const f = HW.forms[+r[3]]; return 'Form ' + f[1] + (f[3] ? ' · ' + plain(f[3]).slice(0, 70) : ''); }
+  if (r[2] === 'b') { const s = M ? (M.stems[r[3]] || [])[0] : null; return s ? s[2].replace(/;/g, '; ') : ''; }
   if (r[2] === 'w') { const e = W?.entries[+r[3]]; return e ? (e[1] ? e[1] + ' · ' : '') + wGloss(e) : 'Wiktionary'; }
   if (r[2] === 'l') return 'Lane’s Lexicon · root ' + [...r[3]].join(' ');
   return '';
 }
 let sel = -1, cur = [];
+// A suggestion whose definition isn't loaded yet shows its transliteration; fetch it and redraw the list.
+let refillT = null;
+function refillSuggest(r) {
+  const rid = r[2] === 'h' ? byId.get(+r[3])?.[4] : HW.forms[+r[3]]?.[0];
+  loadHw([rid]).then(() => { clearTimeout(refillT); refillT = setTimeout(() => { if (!sug.hidden) renderSuggest(); }, 30); }, () => {});
+}
 function renderSuggest() {
   const q = qEl.value;
   $('#clear').hidden = !q;
@@ -586,6 +687,10 @@ function lookupWord(q) {
   }
   // mark HW words matching the parsed stems/lemmas
   for (const a of parses) for (const k of [norm(a.stem[0]), norm(a.stem[4] || '')]) for (const e of hwNorm.get(k) || []) if (roots.includes(e[4])) hits.add(e[0]);
+  // Hamza spelling is ignored when matching, so مؤمن also finds مأمن. If a headword is spelled exactly as typed,
+  // highlight just that one (Hans Wehr often writes headwords without hamza, so this only narrows when it can).
+  const typed = q.replace(DIAC, '').trim(), exact = [...hits].filter(id => byId.get(id)?.[1] === typed);
+  if (exact.length && exact.length < hits.size) { hits.clear(); exact.forEach(id => hits.add(id)); }
 
   const arWord = roots.length ? '' : n;   // a root only the Arabic dictionaries have
   if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length && !arHas(n)) return null;
@@ -659,6 +764,14 @@ function ed1(a, b) {
 }
 
 function englishSearch(q) {
+  // English searches every Hans Wehr definition, so it needs all the chunks (the background prefetch may have them)
+  if (!hwHave(HW.chunks)) {
+    const tok = ++defsTok, here = MEM ? memCur : location.hash;
+    main.innerHTML = '<p class="muted">Loading Hans Wehr’s definitions…</p>';
+    loadAllHw().then(() => { if (tok === defsTok && view === 'result' && (MEM ? memCur : location.hash) === here) englishSearch(q); },
+      () => { main.innerHTML = '<p class="muted">Couldn’t load Hans Wehr. Check your connection and try again.</p>'; });
+    return;
+  }
   const l = latin(q);
   // transliteration exact matches first
   const tr = HW.entries.filter(e => e[6] && latin(e[6]) === l);
@@ -726,9 +839,19 @@ function showEntry(id) {
   showRoots([e[4]], { hits: new Set([id]), force: 'hw' }, e[1]);   // an entry you opened always shows
 }
 
+let defsTok = 0;
 function showRoots(rootIds, opt, q) {
   const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', arWord = '', force = '', retry = null } = opt;
   main.dataset.empty = '';
+  // Hans Wehr's definitions come in chunks: fetch the ones these roots need first (usually one small file).
+  const tok = ++defsTok, here = MEM ? memCur : location.hash;
+  if (HW && rootIds.length && (force === 'hw' || !resultPrefs().off.has('hw')) && !hwHave(rootIds)) {
+    main.innerHTML = '<p class="muted">Loading Hans Wehr…</p>';
+    const still = () => tok === defsTok && view === 'result' && (MEM ? memCur : location.hash) === here;
+    loadHw(rootIds).then(() => { if (still()) showRoots(rootIds, opt, q); },
+      () => { if (still()) main.innerHTML = '<p class="muted">Couldn’t load Hans Wehr. Check your connection and try again.</p>'; });
+    return;
+  }
   lastLaneWord = laneWord;
   lastArWord = norm(q || '');
   const pr = resultPrefs();
@@ -1004,7 +1127,7 @@ async function fillLead(el, retry, ids, arKeys, laneWord) {
   });
 }
 
-function stripHead(e) { const d = e[2]; return d.startsWith(e[1]) ? d.slice(e[1].length).trim() : d; }
+function stripHead(e) { const d = e[2] || ''; return d.startsWith(e[1]) ? d.slice(e[1].length).trim() : d; }
 function plain(s) { return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
 function defHtml(s, tags = ['b', 'i']) {
   let h = esc(s);

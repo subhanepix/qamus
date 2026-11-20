@@ -10,11 +10,13 @@ It does three things:
 ## What's in it
 
 ### Dictionary
-- **Hans Wehr** (24,799 entries, 7,390 roots, 5,453 verb forms), from GibreelAbdullah/HansWehrDictionary.
+- **Hans Wehr** (24,799 entries, 7,390 roots, 5,453 verb forms), from GibreelAbdullah/HansWehrDictionary. The app downloads its headwords up front (`data/hw/index.json`) and the definitions in chunks of 200 roots (`data/hw/cNNN.json`) as results need them; the rest are fetched quietly afterwards so the offline copy fills up (skipped when the device asks to save data).
 - **Buckwalter morphological lexicon** (~82k stems with English glosses, prefix/suffix tables). It strips و ف ب ل ك س ال and pronoun/plural/verb endings, then maps the stem to its Hans Wehr root. It also covers modern words missing from Hans Wehr.
 - **Wiktionary** (15.4k entries, 232k inflected forms including broken plurals and conjugations), from English Wiktionary via Vuizur/Wiktionary-Dictionaries. CC BY-SA 3.0 / GFDL.
 - **Lane's Lexicon** (47.8k entries under 5k roots), from GibreelAbdullah/LaneLexicon. It's split into one file per first letter and loaded only when you open a root's Lane section.
 - **al-Mufradāt fī gharīb al-Qur’ān** by al-Rāghib al-Iṣfahānī (ed. Ṣafwān al-Dāwūdī; 1,621 entries) and **Mukhtār al-Ṣiḥāḥ** by al-Rāzī (3,468 entries), both in Arabic, from al-Maktaba al-Shāmila's EPUBs with the printed editions' vowel marks: Mukhtār is fully vowelled, al-Mufradāt has the editor's marks on headwords and Qur'an quotes. Al-Mufradāt's Qur'an quotes are located using OpenITI's copy, which marks them (CC BY-NC-SA 4.0). Each book is split by root into one file per first letter, loaded when a result needs it. They show as their own sections, after the other dictionaries by default; every word in them can be tapped to look it up, and the word you searched is highlighted.
+- **Ranking:** when a word could be several things, readings Hans Wehr has as an entry of their own come first, then the root used most in the Qur'an (المؤمنين reads مُؤْمِن "believer", not مُؤَمِّن "guarantor"); a headword spelled exactly as typed, hamza included, is the one highlighted (مؤمن, not مأمن).
+- **First load:** the search index, then Hans Wehr's headwords and the chunk for what's on screen, then the word analyser, then Wiktionary, one at a time so a slow connection isn't split between them. On slow 4G a first visit shows كتاب in about 8 s (it used to take about 21 s).
 - **Matching:** search ignores harakat, tatweel and hamza spelling (ء أ إ آ ٱ ؤ ئ all match ا), and treats ة/ه and ى/ي as the same.
 - **When nothing matches:** search tries the word again without a leading ال (or وال, بال, فال, كال, لل), then without an emphatic نّ: before a pronoun ending (تغرنكم → تغركم) or at the end (ليسجنن → ليسجن). A note says what it showed instead.
 - **What you can type:** an Arabic word in any inflection, a root with spaces or dashes (`ك ت ب`), English, or transliteration (`kitab`).
@@ -93,6 +95,7 @@ npm test                          # unit tests, then the Playwright suite (run b
   | `study` | Browse, marks, filters, Review/SM-2, keyboard, swipe, offline |
   | `arabic` | the two Arabic–Arabic dictionaries: sections, highlighting, tap to look up, roots only they have, saving |
   | `settings` | the header gear, the settings page, drag and keyboard reordering, dictionaries on/off, the word-analysis toggle, reset |
+  | `loading` | the first-load order, Hans Wehr's chunks, the background prefetch, a slow chunk |
   | `intro` | the first-visit tour, the username suggestions, the old address's "new home" notice |
   | `nav` | tabs, the side panel and status bar, `#account`, the memory router, keyboard shortcuts, titles, the home greeting, the update notice |
 
@@ -141,5 +144,6 @@ Each username has one JSON document: `history`, `folders`, `cards`, `reviews` an
 python3 build/build.py <hanswehr.sqlite> <pyaramorph data dir> data/
 python3 build/build_extra.py <wiktionary stardict dir> <lanelexicon.sqlite> data/
 python3 build/build_arabic.py <23636.epub> <23193.epub> data/ [<Mufradat.JK001150-ara1>]
+python3 build/split_hw.py data/
 ```
-Run them in that order: `build_extra.py` adds to the index that `build.py` writes, and `build_arabic.py` files its entries under Hans Wehr's roots. The two EPUBs are at `old.shamela.ws/epubs/236/23636.epub` and `old.shamela.ws/epubs/231/23193.epub`; the optional OpenITI text (for al-Mufradāt's Qur'an quote marks) is in the [0525AH](https://github.com/OpenITI/0525AH/tree/master/data/0502RaghibIsbahani/0502RaghibIsbahani.Mufradat) repository.
+Run them in that order: `split_hw.py` makes the app's copy of Hans Wehr (`data/hw/`) from `hw.json`, which the other scripts read; `build_extra.py` adds to the index that `build.py` writes, and `build_arabic.py` files its entries under Hans Wehr's roots. The two EPUBs are at `old.shamela.ws/epubs/236/23636.epub` and `old.shamela.ws/epubs/231/23193.epub`; the optional OpenITI text (for al-Mufradāt's Qur'an quote marks) is in the [0525AH](https://github.com/OpenITI/0525AH/tree/master/data/0502RaghibIsbahani/0502RaghibIsbahani.Mufradat) repository.

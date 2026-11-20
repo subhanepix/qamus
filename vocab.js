@@ -247,6 +247,10 @@ function markSaved(root) {
 async function prefill(p) {
   const f = { word: '', gloss: '', arGloss: '', root: '', translit: '', context: '', highlight: '', note: '', tags: [], source: p.s, ref: String(p.r ?? '') };
   const rootOf = rid => { const r = byId.get(rid); return r ? [...r[1]].join(' ') : ''; };
+  if (p.s === 'hw') {   // its definition may not have arrived yet
+    const rid = /^f\d+$/.test(f.ref) ? HW.forms[+f.ref.slice(1)]?.[0] : byId.get(+f.ref)?.[4];
+    if (rid != null) await loadHw([rid]);
+  }
   if (p.s === 'hw' && /^f\d+$/.test(f.ref)) {
     const x = HW.forms[+f.ref.slice(1)];
     f.word = x[2]; f.gloss = shortGloss(x[3]); f.root = rootOf(x[0]);

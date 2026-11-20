@@ -140,3 +140,23 @@ test.describe('cold load', () => {
   expect(await page.evaluate(() => W === null)).toBe(true);                // Wiktionary still on its way
   });
 });
+
+// Ambiguous readings: ties go to a word Hans Wehr has as an entry of its own, then to the root with more
+// Qur'an occurrences. المؤمنين must read as مُؤْمِن "believer", not مُؤَمِّن "guarantor".
+test('المؤمنين → "believer" is the first reading', async ({ page }) => {
+  await lookup(page, 'المؤمنين');
+  await expect(page.locator('main .parse .gl').first()).toContainText('believer');
+  const gl = await page.locator('main .parse .gl').allTextContents();
+  expect(gl.findIndex(t => /guarantor/.test(t))).not.toBe(0);
+});
+
+test('مؤمن on its own → Hans Wehr\'s own entry, mu’min "believer", is the highlighted word', async ({ page }) => {
+  await lookup(page, 'مؤمن');
+  await expect(page.locator('main .word.hit').first()).toContainText('believer');
+});
+
+test('the Latin spelling used to compare with Hans Wehr', async ({ page }) => {
+  await lookup(page, 'كتاب');
+  const r = await page.evaluate(() => ['مُؤْمِن', 'مُؤَمِّن', 'كِتَاب', 'مَكْتَبَة', 'عَلَّمَ'].map(vocLatin));
+  expect(r).toEqual(['mumin', 'muammin', 'kitab', 'maktaba', 'allama']);
+});

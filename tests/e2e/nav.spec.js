@@ -301,6 +301,7 @@ test.describe('navigation (local)', () => {
     await boot(page);
     await seed(page, { cards: [{ id: 'c1', word: 'يُعَلِّمُ' }] });
     await page.evaluate(() => QamusStore.mutate(d => { d.history = [{ q: 'نشرح', t: Date.now() }]; }));
+    await page.evaluate(() => loadAllHw());                                    // glosses in place, so the list doesn't redraw mid-check
     await page.locator('#q').fill('كتا');
     await expect(page.locator('#suggest .w').first()).toBeVisible();
     // Scheherazade's marks reach 1.29em above the baseline and its tails 0.52em below: a line box under ~1.94em clips them

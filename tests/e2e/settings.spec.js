@@ -176,7 +176,7 @@ test.describe('settings (local)', () => {
     await expect(page).toHaveURL(/#settings$/);
     const back = page.locator('#set-back');
     await expect(back).toHaveText('Back to كتب');
-    await page.locator('[data-size-step="en"][data-d="1"]').click();           // changing a setting doesn't lose the way back
+    await page.locator('[data-size-step="ar"][data-d="1"]').click();           // changing a setting doesn't lose the way back (Arabic text sits below this point, so the page above doesn't shift)
     await back.click();
     await expect(page).toHaveURL(/#q=/);
     expect(decodeURIComponent(page.url().split('#q=')[1])).toBe('كتب');
