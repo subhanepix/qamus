@@ -1206,7 +1206,7 @@ function recordSearch(raw) {
       d.history = [{ q, t }, ...d.history.filter(h => h.q !== q)];
       let live = 0;
       d.history = d.history.filter(h => h.deleted || ++live <= HIST_MAX);
-    });
+    }, { quiet: true });   // synced in batches: searches are most of an account's writes
   });
 }
 function deleteSearch(q) {
@@ -1603,7 +1603,7 @@ function initSync() {
     // re-greet on home when the signed-in user changes (sign-in, sign-out)
     const regreet = st => { if (view === 'home' && (st.user || '') !== greetedUser) home(); };
     Sync.on('status', st => { renderAcct(st); regreet(st); });
-    Sync.init({ url: SYNC_URL });
+    Sync.init({ url: SYNC_URL, quietDelay: window.QAMUS_TEST_QUIET_DELAY });
     renderAcct(Sync.state);
     regreet(Sync.state);
     acctEl.hidden = false;

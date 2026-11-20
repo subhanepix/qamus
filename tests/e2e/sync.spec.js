@@ -146,6 +146,47 @@ test('debounced push sends a change without Sync now', async ({ page, user }) =>
   await expect.poll(() => status(page)).toBe('synced');
 });
 
+test('search history syncs in batches: not on its own, with the next change, or when the app is backgrounded', async ({ page, user }) => {
+  await open(page);
+  await ready(page);
+  await signIn(page, user);
+  const puts = [];
+  page.on('request', r => { if (r.method() === 'PUT' && r.url().startsWith(SYNC)) puts.push(r); });
+  const hist = async () => ((await remote(user))?.history || []).filter(h => !h.deleted).map(h => h.q);
+  const search = q => page.evaluate(async q => { recordSearch(q); await QamusStore.init(); await new Promise(r => setTimeout(r, 50)); }, q);
+
+  await search('قلم');
+  expect(await page.evaluate(() => QamusStore.doc.history[0].q)).toBe('قلم');   // saved here at once
+  await page.waitForTimeout(3500);                                                 // past the 2 s debounce
+  expect(puts.length).toBe(0);
+  expect(await page.evaluate(() => [QamusStore.dirty, QamusSync.state.dirty, QamusSync.state.status])).toEqual([true, false, 'synced']);
+  await expect(page.locator('#acct')).toHaveAttribute('data-status', 'synced');   // no "unsynced changes" for history alone
+
+  await putCard(page, { id: 'c_with', gloss: 'with history' });                  // an ordinary change takes it along
+  await expect.poll(hist, { timeout: 8000 }).toEqual(['قلم']);
+  expect(card((await remote(user)).cards, 'c_with').gloss).toBe('with history');
+  expect(puts.length).toBe(1);
+
+  await search('كتاب');
+  await page.waitForTimeout(2500);
+  expect(puts.length).toBe(1);
+  await page.evaluate(() => {                                                      // app goes to the background
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await expect.poll(hist, { timeout: 8000 }).toEqual(['كتاب', 'قلم']);
+  await expect.poll(() => page.evaluate(() => QamusStore.dirty)).toBe(false);
+});
+
+test('search history left waiting is sent after the batch delay', async ({ page, user }) => {
+  await page.addInitScript(() => { window.QAMUS_TEST_QUIET_DELAY = 1500; });
+  await open(page);
+  await ready(page);
+  await signIn(page, user);
+  await page.evaluate(() => recordSearch('قلم'));
+  await expect.poll(async () => ((await remote(user))?.history || []).map(h => h.q), { timeout: 8000 }).toEqual(['قلم']);
+});
+
 test('two devices: save on A appears on B; deletes propagate as tombstones', async ({ page, user, browser }) => {
   await open(page); await ready(page);
   await signIn(page, user);

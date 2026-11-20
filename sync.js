@@ -80,18 +80,22 @@
       return initP;
     },
     // fn(draft) edits a copy; the result is validated before it replaces the doc.
-    mutate(fn) {
+    // { quiet: true } (search history) still saves locally at once, but syncs lazily: with the next
+    // other change, when the app goes to the background, or after QUIET_DELAY, whichever comes first.
+    mutate(fn, opts) {
       const draft = structuredClone(doc);
       const ret = fn(draft);
       draft.updatedAt = Date.now();
       const v = QM.validateDoc(draft);
       if (!v.ok) throw new Error('Qamus: invalid change — ' + v.error);
+      const quiet = !!(opts && opts.quiet) && (!meta.dirty || !!meta.quiet);   // only quiet changes are waiting
       doc = draft;
       meta.dirty = true;
+      meta.quiet = quiet;
       meta.gen++;
       persist();
       emit('change', { doc, source: 'local' });
-      Sync._localChange();
+      Sync._localChange(quiet);
       return ret;
     },
     async reset() {
@@ -106,20 +110,22 @@
       const changed = !QM.sameContent(doc, next);
       doc = next;
       meta.dirty = dirty;
+      meta.quiet = false;
       persist();
       if (changed) emit('change', { doc, source: 'remote' });
     },
   };
 
   // ======================= Sync =======================
-  const DEBOUNCE = 2000, TIMEOUT = 15000, OFFLINE_RETRY = 30000, PULL_THROTTLE = 10000;
+  const DEBOUNCE = 2000, QUIET_DELAY = 5 * 60 * 1000, TIMEOUT = 15000, OFFLINE_RETRY = 30000, PULL_THROTTLE = 10000;
   let url = '', user = null, status = 'local', error = '';
   let session = 0;               // bumps on sign in/out so stale responses are ignored
   let busy = false, pending = null, idleWaiters = [];
-  let pushTimer = 0, retryTimer = 0, backoff = 0, lastPullAt = 0, uncleanStreak = 0, wired = false;
+  let pushTimer = 0, quietDelay = QUIET_DELAY, retryTimer = 0, backoff = 0, lastPullAt = 0, uncleanStreak = 0, wired = false;
 
   const enabled = () => !!(url && user);
-  const state = () => ({ enabled: !!url, user, status, error, lastSync: meta.lastSync, dirty: meta.dirty });
+  // dirty: changes worth mentioning are waiting (search history alone waiting for its batch isn't one)
+  const state = () => ({ enabled: !!url, user, status, error, lastSync: meta.lastSync, dirty: meta.dirty && !meta.quiet });
   function setStatus(s, err = '') { status = s; error = err; emit('status', state()); }
 
   async function request(method, name, body) {
@@ -207,7 +213,7 @@
     if (busy) { pending = (pending === 'pull' || mode === 'pull') ? 'pull' : 'push'; return; }
     busy = true;
     clearTimeout(retryTimer);
-    if (mode === 'pull') clearTimeout(pushTimer);
+    if (mode === 'pull') cancelPush();
     try { mode === 'pull' ? await doPull() : await doPush(false); }
     catch (e) { setStatus('error', String(e && e.message || e)); }
     finally {
@@ -217,9 +223,11 @@
     }
   }
   function whenIdle() { return busy ? new Promise(r => idleWaiters.push(r)) : Promise.resolve(); }
-  function schedulePush(ms = DEBOUNCE) {
-    clearTimeout(pushTimer);
-    pushTimer = setTimeout(() => cycle('push'), ms);
+  function cancelPush() { clearTimeout(pushTimer); pushTimer = 0; }
+  function schedulePush(ms = DEBOUNCE, lazy = false) {
+    if (lazy && pushTimer) return;   // a push is already coming; the quiet change rides along
+    cancelPush();
+    pushTimer = setTimeout(() => { pushTimer = 0; cycle('push'); }, ms);
   }
 
   function wire() {
@@ -227,7 +235,7 @@
     document.addEventListener('visibilitychange', () => {
       if (!enabled()) return;
       if (document.visibilityState === 'visible') { if (Date.now() - lastPullAt > PULL_THROTTLE) cycle('pull'); }
-      else if (meta.dirty) { clearTimeout(pushTimer); cycle('push'); }   // flush before the app is backgrounded
+      else if (meta.dirty) { cancelPush(); cycle('push'); }   // flush before the app is backgrounded
     });
     root.addEventListener('online', () => { if (enabled()) cycle('pull'); });
     root.addEventListener('offline', () => { if (enabled() && !busy) setStatus('offline'); });
@@ -238,6 +246,7 @@
     on(type, f) { return on(type, f); },
     init(opts) {
       url = String((opts && opts.url) || '').replace(/\/+$/, '');
+      if (opts && opts.quietDelay >= 0) quietDelay = +opts.quietDelay;
       user = url ? QM.normUsername(LS.get('qamus.user') || '') : null;
       wire();
       if (enabled()) cycle('pull'); else setStatus('local');
@@ -268,14 +277,14 @@
     // so the UI can ask again; pass force:true to clear anyway).
     async signOut({ keepData = false, force = false } = {}) {
       if (meta.dirty && enabled()) {
-        clearTimeout(pushTimer);
+        cancelPush();
         cycle('push');
         await Promise.race([whenIdle(), sleep(5000)]);
       }
       const unsynced = meta.dirty && enabled();
       if (unsynced && !keepData && !force) return { done: false, unsynced: true };
       session++;
-      clearTimeout(pushTimer); clearTimeout(retryTimer);
+      cancelPush(); clearTimeout(retryTimer);
       user = null; pending = null;
       LS.del('qamus.user');
       LS.set('qamus.syncSkipped', '1');
@@ -289,8 +298,9 @@
       return whenIdle().then(state);
     },
     whenIdle,
-    _localChange() {
+    _localChange(quiet) {
       if (!enabled()) return;
+      if (quiet) return schedulePush(quietDelay, true);
       schedulePush();
       if (status === 'synced') setStatus('syncing');
     },

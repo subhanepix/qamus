@@ -121,7 +121,7 @@ npm test                          # unit tests, then the Playwright suite (run b
 Each username has one JSON document: `history`, `folders`, `cards`, `reviews` and `settings`. Each device keeps a full copy in IndexedDB.
 
 **Pushing and pulling:**
-- A push sends the whole document about 2 s after a change.
+- A push sends the whole document about 2 s after a change. New searches are the exception: they are saved on the device at once but synced in batches, with the next other change, when the app goes to the background, or after 5 minutes.
 - The Worker merges it with the stored copy and returns the result.
 - The app pulls when it opens, when it comes back to the foreground, when the network returns, and on **Sync now**.
 

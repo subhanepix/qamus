@@ -14,6 +14,5 @@ Qamus is mostly used for looking up words while reading, with study about 20% of
 
 Sync now stores accounts in D1 (about 100,000 writes a day on the free plan, one per sync), so capacity is in the thousands of daily users.
 
-- **Sync history less often.** Push history changes when the app goes to the background instead of about 2 seconds after each search. Would roughly double capacity again.
 - **Workers Paid ($5/month).** Raises the D1 and Worker limits further, with no code change. Only worth it if Qamus grows well beyond that.
 - **A custom domain.** Put a real domain (e.g. from Cloudflare Registrar, about $10–20 a year) in front of the Pages project `alqamus`: add it under the project's Custom domains, add it to `ALLOWED_ORIGIN`, and update `NEW_HOME` in `app.js`.
