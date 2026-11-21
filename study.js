@@ -67,7 +67,7 @@ function buildDeck(keepId) {
     ss.idx = at >= 0 ? at : 0;
   } else {
     const eod = endOfDay(Date.now());
-    const cards = scopeCards();
+    const cards = scopeCards().filter(c => !cardPaused(c));
     const due = cards.filter(c => reviewOf(c.id)?.last && reviewOf(c.id).due <= eod).sort((a, b) => reviewOf(a.id).due - reviewOf(b.id).due);
     const fresh = cards.filter(c => !reviewOf(c.id)?.last);
     const q = [...due, ...fresh].map(c => c.id);
@@ -163,10 +163,10 @@ function cardHtml(c) {
 function stageHtml() {
   if (ss.mode === 'review' && ss.done) {
     const now = Date.now(), eodT = endOfDay(now, 1);
-    const tomorrow = scopeCards().filter(c => { const r = reviewOf(c.id); return !r?.last || r.due <= eodT; }).length;
+    const tomorrow = scopeCards().filter(c => { if (cardPaused(c)) return false; const r = reviewOf(c.id); return !r?.last || r.due <= eodT; }).length;
     const n = ss.reviewed.size;
     return `<div class="st-done">
-      <h2>${n ? 'Done for today' : 'Nothing due today'}</h2>
+      <h2>${n ? 'Done for today' : scopeCards().length && scopeCards().every(cardPaused) ? 'Reviews are paused here' : 'Nothing due today'}</h2>
       ${n ? `<p>${plural(n, 'card')} reviewed${ss.again ? ` · ${ss.again} again` : ''}.</p>` : ''}
       <p><b id="st-tomorrow">${tomorrow}</b> due tomorrow.</p>
       <div class="actions"><button type="button" class="btn" data-go="${esc(backHash())}">${ss.ids.length > 1 ? 'Back to Vocab' : 'Back to folder'}</button>

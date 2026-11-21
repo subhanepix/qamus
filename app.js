@@ -489,7 +489,7 @@ function renderSide() {
     h += `<section class="side-sec" aria-label="Folders"><div class="side-h"><span>Folders</span>${due ? `<span class="side-due">${due} due</span>` : ''}</div>` +
       (rows.length ? `<ul class="side-list">${rows.map(({ f, depth }) => {
         const cs = cardsDeep(f.id), d = dueCount(cs);
-        return `<li><a class="side-item${cur(f.id === curF)}" style="--depth:${depth}" href="#folder=${encodeURIComponent(f.id)}" data-sgo="folder=${esc(f.id)}"><span class="side-w" dir="auto">${esc(f.name)}</span><span class="side-n${d ? ' due' : ''}">${d ? d + ' due' : cs.length}</span></a></li>`;
+        return `<li><a class="side-item${cur(f.id === curF)}" style="--depth:${depth}" href="#folder=${encodeURIComponent(f.id)}" data-sgo="folder=${esc(f.id)}"><span class="side-w" dir="auto">${esc(f.name)}</span><span class="side-n${d ? ' due' : ''}">${isPaused(f.id) ? 'paused' : d ? d + ' due' : cs.length}</span></a></li>`;
       }).join('')}</ul>` : '<p class="side-empty">Save a word with the bookmark to start a folder.</p>') + '</section>';
   }
   sideEl.innerHTML = h;
@@ -593,7 +593,7 @@ function homeStudy() {
   if (!hasVocab()) return '';
   const cards = liveCards();
   if (!cards.length) return '';
-  const dueCards = cards.filter(c => cardStatus(c).k !== 'later');
+  const dueCards = cards.filter(isDue);
   const ids = [...new Set(dueCards.map(cardFolder))];
   const big = dueCards.length ? `<b>${dueCards.length}</b> ${dueCards.length === 1 ? 'card' : 'cards'} to study`
     : 'All caught up';

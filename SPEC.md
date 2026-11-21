@@ -36,6 +36,8 @@ One KV key per user: `user:<username>` → JSON document:
 }
 ```
 
+A folder may also carry `"paused": true`. A paused folder, and every folder inside it, keeps its cards and their reviews, but none of those cards count as due or enter Review until it's resumed. Due dates aren't shifted, so overdue cards come straight back on resume. Browse still works.
+
 ### Endpoints
 | Method | Path | Behavior |
 |---|---|---|

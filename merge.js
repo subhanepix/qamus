@@ -104,7 +104,7 @@
   const isStr = x => typeof x === 'string' && x.length <= MAX_STR;
 
   const DOC_KEYS = ['v', 'updatedAt', 'history', 'folders', 'cards', 'reviews', 'settings'];
-  const FOLDER_KEYS = { id: 'id', name: 'str', parent: 'parent', createdAt: 'num', updatedAt: 'num', deleted: 'bool' };
+  const FOLDER_KEYS = { id: 'id', name: 'str', parent: 'parent', createdAt: 'num', updatedAt: 'num', deleted: 'bool', paused: 'bool' };
   const CARD_KEYS = {
     id: 'id', folder: 'id', word: 'str', key: 'str', root: 'str', source: 'source', ref: 'str',
     gloss: 'str', arGloss: 'str', translit: 'str', context: 'str', highlight: 'str', note: 'str',

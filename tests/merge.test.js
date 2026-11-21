@@ -188,6 +188,7 @@ test('validateDoc rejects bad shapes', () => {
   bad(d => { d.history = {}; }, /history: not an array/);
   bad(d => { d.history[0].t = 'x'; }, /history\[0\]: bad "t"/);
   bad(d => { d.folders[0].parent = 5; }, /bad "parent"/);
+  bad(d => { d.folders[0].paused = 'yes'; }, /bad "paused"/);
   bad(d => { d.cards[0].tags = 'noun'; }, /bad "tags"/);
   bad(d => { d.cards[0].gloss = 'x'.repeat(5000); }, /bad "gloss"/);
   bad(d => { d.cards[0].source = 'web'; }, /bad "source"/);
@@ -246,4 +247,12 @@ test('reviews may carry a browse mark; merge keeps the newer record', () => {
   const a = doc({ cards, reviews: { c1: { mark: 1, updatedAt: 10 } } });
   const b = doc({ cards, reviews: { c1: { due: 5, interval: 1, ease: 2.5, reps: 1, lapses: 0, last: 4, mark: 1, updatedAt: 20 } } });
   assert.deepEqual(M.merge(a, b, NOW).reviews.c1, b.reviews.c1);
+});
+
+test('folders may be paused; the newer folder record carries the pause', () => {
+  const on = doc({ folders: [folder('f1', 20, { paused: true })] });
+  assert.equal(M.validateDoc(on).ok, true);
+  const off = doc({ folders: [folder('f1', 10)] });
+  assert.equal(M.merge(on, off, NOW).folders[0].paused, true);
+  assert.equal('paused' in M.merge(on, doc({ folders: [folder('f1', 30)] }), NOW).folders[0], false);
 });

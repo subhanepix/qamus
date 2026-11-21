@@ -96,14 +96,29 @@ function cardsDeep(id) { const ids = new Set([id, ...descendants(id)]); return l
 // Due dates sit on local midnight, so "due" means due by the end of today.
 const dayStart = (t, add = 0) => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + add); return d.getTime(); };
 const endOfDay = (t, add = 0) => dayStart(t, add + 1) - 1;
+// A paused folder (and every folder inside it) keeps its cards and their review history, but none of them count
+// as due or enter Review until it's resumed. Due dates are left alone, so overdue cards come back on resume.
+let pausedDoc = null, pausedIds = new Set();
+function pausedFolders() {
+  if (pausedDoc !== vdoc()) {
+    pausedDoc = vdoc(); pausedIds = new Set();
+    for (const f of allFolders()) if (folderPathList(f.id).some(x => x.paused)) pausedIds.add(f.id);
+  }
+  return pausedIds;
+}
+const isPaused = id => pausedFolders().has(id);
+const pausedBy = id => folderPathList(id).reverse().find(x => x.paused) || null;   // the folder that set the pause
+const cardPaused = c => isPaused(cardFolder(c));
+const isDue = c => { const k = cardStatus(c).k; return k === 'new' || k === 'due'; };
 function cardStatus(card, now = Date.now()) {
+  if (cardPaused(card)) return { k: 'paused', label: 'Paused' };
   const r = vdoc().reviews[card.id];
   if (!r || !r.last) return { k: 'new', label: 'New' };   // never reviewed (a browse mark alone doesn't count)
   if (r.due <= endOfDay(now)) return { k: 'due', label: 'Due' };
   const d = Math.max(1, Math.round((dayStart(r.due) - dayStart(now)) / 86400000));
   return { k: 'later', label: `in ${d}d` };
 }
-const dueCount = cards => cards.filter(c => cardStatus(c).k !== 'later').length;
+const dueCount = cards => cards.filter(isDue).length;
 
 let sidxDoc = null, sidx = new Map();
 function savedIndex() {   // "source|ref" -> live cards saved from that dictionary row
@@ -200,6 +215,15 @@ function renameFolder(id, name) {
     if (id === INBOX) ensureInbox(d);
     const f = d.folders.find(x => x.id === id && !x.deleted);
     if (f) { f.name = clip(name, 100).trim(); f.updatedAt = Date.now(); }
+  });
+}
+function setFolderPaused(id, on) {
+  Store.mutate(d => {
+    if (id === INBOX) ensureInbox(d);
+    const f = d.folders.find(x => x.id === id && !x.deleted);
+    if (!f) return;
+    if (on) f.paused = true; else delete f.paused;
+    f.updatedAt = Date.now();
   });
 }
 function moveFolder(id, parent) {
@@ -317,7 +341,7 @@ function saveToSheet(payload, word) {
         const id = addCard(fields, folder, newName);
         const at = cardFolder(liveCards().find(c => c.id === id) || { folder });
         api.close();
-        toast(`Saved to <b>${esc(folderPath(at))}</b>`, { label: 'Edit', run: () => { const c = liveCards().find(x => x.id === id); if (c) cardSheet({ mode: 'edit', card: c }); } });
+        toast(`Saved to <b>${esc(folderPath(at))}</b>${isPaused(at) ? ' (paused)' : ''}`, { label: 'Edit', run: () => { const c = liveCards().find(x => x.id === id); if (c) cardSheet({ mode: 'edit', card: c }); } });
       };
       p.querySelector('.pick-list').addEventListener('click', e => {
         const row = e.target.closest('.pick-row');
@@ -508,6 +532,8 @@ function folderActionsSheet(id) {
       <div class="actions">
         <button type="button" class="btn" id="fa-open">Open</button>
         <button type="button" class="btn" id="fa-sub">New sub-folder</button>
+        ${f.paused ? '<button type="button" class="btn" id="fa-pause" data-on="0">Resume reviews</button>'
+          : isPaused(id) ? '' : '<button type="button" class="btn" id="fa-pause" data-on="1">Pause reviews</button>'}
         ${id !== INBOX ? '<button type="button" class="btn quiet danger-text" id="fa-del">Delete folder…</button>' : ''}
       </div>
       ${id !== INBOX ? `<div class="confirm" id="fa-confirm" hidden>
@@ -534,6 +560,13 @@ function folderActionsSheet(id) {
       });
       $p('#fa-open').addEventListener('click', () => { api.close(); go('folder=' + id); });
       $p('#fa-sub').addEventListener('click', () => { api.close(); newFolderSheet(id); });
+      $p('#fa-pause')?.addEventListener('click', e => {
+        const on = e.currentTarget.dataset.on === '1';
+        setFolderPaused(id, on);
+        api.close();
+        toast(on ? `Paused <b>${esc(f.name)}</b>` : `Resumed <b>${esc(f.name)}</b>`,
+          { label: 'Undo', run: () => setFolderPaused(id, !on) });
+      });
       if (id === INBOX) return;
       const conf = $p('#fa-confirm');
       $p('#fa-del').addEventListener('click', () => { conf.hidden = false; $p('#fa-del-no').focus(); });
@@ -579,7 +612,7 @@ function vocabLink() {
 }
 function folderRowHtml(f, depth = 0, selectable = false) {
   const cards = cardsDeep(f.id), due = dueCount(cards), picked = selectable && vsel.picked.has(f.id);
-  const meta = `<span class="fr-meta">${plural(cards.length, 'card')}${due ? ` · <b>${due} due</b>` : ''}</span>`;
+  const meta = `<span class="fr-meta">${plural(cards.length, 'card')}${isPaused(f.id) ? ' · <i class="paused-tag">Paused</i>' : due ? ` · <b>${due} due</b>` : ''}</span>`;
   return `<li class="folder-row ${picked ? 'picked' : ''}" style="--depth:${depth}">
     ${selectable ? `<label class="pick"><input type="checkbox" data-pick-folder="${esc(f.id)}" ${picked ? 'checked' : ''} aria-label="Select ${esc(f.name)}"></label>
       <button type="button" class="fr-open" data-toggle-folder="${esc(f.id)}"><span class="fr-name" dir="auto">${esc(f.name)}</span>${meta}</button>`
@@ -645,6 +678,15 @@ function selectBarHtml(n, total) {
       <button type="button" class="btn quiet danger-text" id="vs-del" ${n ? '' : 'disabled'}>Delete</button>
       <button type="button" class="btn primary" id="vs-done">Done</button>`}</div>`;
 }
+// The banner a paused folder shows: what pausing means and how to undo it (from the folder that set it).
+function pausedNote(id) {
+  const by = isPaused(id) ? pausedBy(id) : null;
+  if (!by) return '';
+  const self = by.id === id;
+  return `<div class="paused-note" role="note"><p><b>${self ? 'Paused' : `Paused with “<span dir="auto">${esc(by.name)}</span>”`}.</b>
+      These cards won’t come up for review or count as due. You can still browse them with Study.</p>
+    <button type="button" class="btn" ${self ? 'id="vf-resume"' : `data-go="folder=${esc(by.id)}"`}>${self ? 'Resume' : 'Go to that folder'}</button></div>`;
+}
 function folderView(id) {
   main.dataset.empty = '';
   const f = folderById(id);
@@ -665,9 +707,10 @@ function folderView(id) {
     <div class="folder-head"><h2 class="folder-title" dir="auto">${esc(f.name)}</h2>
       <span class="muted">${plural(cards.length, 'card')}</span>
       <button type="button" class="fr-more" data-folder-actions="${esc(id)}" aria-label="Folder actions: ${esc(f.name)}">⋯</button></div>
+    ${pausedNote(id)}
     <div class="v-actions">
       ${cardsDeep(id).length ? `<button type="button" class="btn" id="vf-study">Study</button>
-      <button type="button" class="btn ${dueCount(cardsDeep(id)) ? 'primary' : ''}" id="vf-review">Review · ${dueCount(cardsDeep(id))} due</button>` : ''}
+      ${isPaused(id) ? '' : `<button type="button" class="btn ${dueCount(cardsDeep(id)) ? 'primary' : ''}" id="vf-review">Review · ${dueCount(cardsDeep(id))} due</button>`}` : ''}
       <button type="button" class="btn" id="vf-add">Add card</button>
       <button type="button" class="btn" id="vf-import">Import</button>
       ${cards.length ? `<button type="button" class="btn" id="vf-export">Export</button>
@@ -910,6 +953,7 @@ main.addEventListener('click', e => {
     case 'vs-study': case 'vs-review': { const ids = [...vsel.picked]; vsel = { on: false, picked: new Set() }; return go(studyHash(ids, id === 'vs-study' ? 'browse' : 'review')); }
     case 'vf-study': return go(studyHash([vf.folder], 'browse'));
     case 'vf-review': return go(studyHash([vf.folder], 'review'));
+    case 'vf-resume': setFolderPaused(vf.folder, false); return $('#vf-review, #vf-add')?.focus();
     case 'v-export-all': return exportSheet(null);
     case 'vf-add': return cardSheet({ mode: 'add', folder: vf.folder });
     case 'vf-import': return pickImportFile(vf.folder);

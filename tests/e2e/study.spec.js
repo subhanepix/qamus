@@ -272,6 +272,63 @@ test.describe('study (local)', () => {
   }
 });
 
+test.describe('paused folders', () => {
+  test.use({ syncUrl: false });
+  const PAST = Date.now() - 3 * 86400000, FUTURE = Date.now() + 5 * 86400000;
+  const seedTwo = page => seed(page, {
+    folders: [{ id: 'f_a', name: 'Keep' }, { id: 'f_b', name: 'Later' }, { id: 'f_c', name: 'Inside', parent: 'f_b' }],
+    cards: [{ ...CARDS[0], folder: 'f_a' }, { ...CARDS[1], folder: 'f_b' }, { ...CARDS[2], folder: 'f_c' }],
+    reviews: { c2: { due: PAST, interval: 3, ease: 2.5, reps: 2, lapses: 0, last: PAST - 3 * 86400000 } },
+  });
+  const badge = page => page.locator('#tabs .tab-badge');
+
+  test('pausing takes a folder and its sub-folders out of due counts and Review; resuming brings them back unchanged', async ({ page }) => {
+    await boot(page); await seedTwo(page);
+    await page.evaluate(() => go('vocab'));
+    await expect(badge(page)).toHaveText('3');
+
+    await page.locator('[data-folder-actions="f_b"]').click();
+    await page.locator('#fa-pause').click();
+    await expect(page.locator('.toast')).toContainText('Paused');
+    await expect(badge(page)).toHaveText('1');
+    await expect(page.locator('.folder-row', { hasText: 'Later' }).locator('.paused-tag')).toHaveText('Paused');
+    await expect(page.locator('.folder-row', { hasText: 'Inside' }).locator('.paused-tag')).toHaveText('Paused');
+
+    // A sub-folder shows who paused it, and its cards say Paused; Review is gone but Study (browse) stays.
+    await page.evaluate(() => go('folder=f_c'));
+    await expect(page.locator('.paused-note')).toContainText('Paused with “Later”');
+    await expect(page.locator('#vf-review')).toHaveCount(0);
+    await expect(page.locator('#vf-list .badge')).toHaveText('Paused');
+    await page.locator('#vf-study').click();
+    await expect(meta(page)).toHaveText('1 / 1');
+
+    // Review across everything skips paused cards; reviewing the paused folder directly says so.
+    await study(page, ['f_a', 'f_b'], 'review');
+    await expect(meta(page)).toHaveText('1 / 1 · Keep');
+    await study(page, ['f_b'], 'review');
+    await expect(page.locator('.st-done h2')).toHaveText('Reviews are paused here');
+
+    await page.evaluate(() => go('folder=f_b'));
+    await page.locator('#vf-resume').click();
+    await expect(page.locator('.paused-note')).toHaveCount(0);
+    await expect(page.locator('#vf-review')).toHaveText('Review · 2 due');
+    await expect(badge(page)).toHaveText('3');
+    expect((await review(page, 'c2')).due).toBe(PAST);   // dates untouched
+    expect(await page.evaluate(() => 'paused' in QamusStore.doc.folders.find(f => f.id === 'f_b'))).toBe(false);
+  });
+
+  test('pausing can be undone from the toast', async ({ page }) => {
+    await boot(page); await seedTwo(page);
+    await page.evaluate(() => go('vocab'));
+    await page.locator('[data-folder-actions="f_a"]').click();
+    await page.locator('#fa-pause').click();
+    await expect(badge(page)).toHaveText('2');
+    await page.locator('.toast-act').click();
+    await expect(badge(page)).toHaveText('3');
+    expect(await page.evaluate(() => isPaused('f_a'))).toBe(false);
+  });
+});
+
 test.describe('study (synced)', () => {
   async function device(page, user) {
     await page.addInitScript(() => { try { localStorage.setItem('qamus.syncSkipped', '1'); } catch {} });
