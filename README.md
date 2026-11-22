@@ -15,7 +15,9 @@ It does three things:
 - **Wiktionary** (15.4k entries, 232k inflected forms including broken plurals and conjugations), from English Wiktionary via Vuizur/Wiktionary-Dictionaries. CC BY-SA 3.0 / GFDL.
 - **Lane's Lexicon** (47.8k entries under 5k roots), from GibreelAbdullah/LaneLexicon. It's split into one file per first letter and loaded only when you open a root's Lane section.
 - **al-Mufradāt fī gharīb al-Qur’ān** by al-Rāghib al-Iṣfahānī (ed. Ṣafwān al-Dāwūdī; 1,621 entries) and **Mukhtār al-Ṣiḥāḥ** by al-Rāzī (3,468 entries), both in Arabic, from al-Maktaba al-Shāmila's EPUBs with the printed editions' vowel marks: Mukhtār is fully vowelled, al-Mufradāt has the editor's marks on headwords and Qur'an quotes. Al-Mufradāt's Qur'an quotes are located using OpenITI's copy, which marks them (CC BY-NC-SA 4.0). Each book is split by root into one file per first letter, loaded when a result needs it. They show as their own sections, after the other dictionaries by default; every word in them can be tapped to look it up, and the word you searched is highlighted.
-- **Ranking:** when a word could be several things, readings Hans Wehr has as an entry of their own come first, then the root used most in the Qur'an (المؤمنين reads مُؤْمِن "believer", not مُؤَمِّن "guarantor"); a headword spelled exactly as typed, hamza included, is the one highlighted (مؤمن, not مأمن).
+- **Ranking & Tashkeel:** when a word could be several things, readings Hans Wehr has as an entry of their own come first, then the root used most in the Qur'an (المؤمنين reads مُؤْمِن "believer", not مُؤَمِّن "guarantor"). If you add harakat or explicit hamza (e.g. `عِلْم` vs `عَلَم` vs `عَلِمَ`, or partial `عِلم`), exact vocalized matches jump to the top of autocomplete and the root card; if the tashkeel is wrong (e.g. `عُلْم`), full root results still appear cleanly.
+- **Particles & Harf Jarr (`particles.js`):** closed-class Arabic function words (`إِنَّ`, `أَنَّ`, `أَنْ`, `إِنْ`, `لِ`, `لَ`, `مِنْ`, `مَنْ`, `عَلَى`, `لَمْ`, `لَنْ`, etc.) render in a dedicated **Particles & Grammar (`حروف وأدوات`)** card above lexical roots, showing grammatical category, syntactic effect (`عمل`), meanings, examples, and lookalike distinctions.
+- **Appearance & Settings:** switch between **Paper Light**, **Parchment Sepia**, and **Obsidian Night** themes, choose an Arabic typeface (**Amiri**, **Scheherazade New**, or **Noto Naskh Arabic**), scale English and Arabic dictionaries independently (80%–160%), and toggle/reorder dictionaries.
 - **First load:** the search index, then Hans Wehr's headwords and the chunk for what's on screen, then the word analyser, then Wiktionary, one at a time so a slow connection isn't split between them. On slow 4G a first visit shows كتاب in about 8 s (it used to take about 21 s).
 - **Matching:** search ignores harakat, tatweel and hamza spelling (ء أ إ آ ٱ ؤ ئ all match ا), and treats ة/ه and ى/ي as the same.
 - **When nothing matches:** search tries the word again without a leading ال (or وال, بال, فال, كال, لل), then without an emphatic نّ: before a pronoun ending (تغرنكم → تغركم) or at the end (ليسجنن → ليسجن). A note says what it showed instead.
@@ -103,17 +105,16 @@ npm test                          # unit tests, then the Playwright suite (run b
 
 | Path | What it is |
 |---|---|
-| `index.html` | the shell: header with the search field, tabs and account button; the side panel, reading pane and status bar; loads the scripts in order |
-| `app.js` | search and lookup (`norm`, `analyze`, `suggestions`, result views), routing, history, tabs, sheets, login and account |
-| `vocab.js` | cards and folders: bookmarks, save sheet, Vocab and folder views, CSV/JSON import and export |
-| `tour.js` | the first-visit guided tour |
-| `study.js` | study mode: Browse and Review, plus SM-2 `schedule()` |
+| `index.html` | app shell: adaptive left navigation rail, glass search omnibar, reading workspace, and mobile bottom bar |
+| `app.js` | ES module UI: routing, Home desk, result views, Particles cards, Vocab & Folders (with mastery bars, CSV/JSON import/export), Study mode (Browse + SM-2 Review with Undo), History, Settings/Appearance Studio, and Sync/Account sheets |
+| `engine.js` | ES module lexicographic engine: normalization, Buckwalter morphology (`analyze`), soft tashkeel/transliteration scoring, Hans Wehr chunked loading, Wiktionary, Lane, al-Mufradāt, and Mukhtār al-Ṣiḥāḥ |
+| `particles.js` | curated Arabic function words (`حروف الجرّ`, `إنّ وأخواتها`, `حروف النصب والجزم`, conditionals, conjunctions) with syntactic effects and examples |
 | `sync.js` | `QamusStore` (IndexedDB document, falling back to memory) and `QamusSync` (the push/pull loop) |
 | `merge.js` | shared merge and validation, used by both the site and the Worker |
-| `sw.js` | service worker: caches the shell and data first (cache-first), refreshed in the background |
-| `style.css` | design tokens (light and dark) and all styles: flat, ruled, one accent; `--bg` is chrome and `--card` is the reading pane |
+| `sw.js` | split-cache service worker (`qamus-shell-vN` vs `qamus-data-vN`) so UI deploys don't re-download ~14 MB of static dictionary JSON |
+| `style.css` | editorial lexicon design tokens (Paper Light, Parchment Sepia, Obsidian Night) and all styles |
 | `worker/` | the Cloudflare Worker (`wrangler.toml`, `src/index.js`) |
-| `tests/` | unit tests, Playwright specs, `serve.js` (static server for dev and tests) |
+| `tests/` | unit tests (`merge.test.js`, `worker.test.js`, `engine.test.js`), Playwright specs, `serve.js` (static server for dev and tests) |
 | `build/`, `data/` | the dictionary data and the scripts that build it (`data/lane/`, `data/mufradat/`, `data/mukhtar/` are split by first letter) |
 
 ## Data and sync model

@@ -1,65 +1,133 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="paper" data-ar-font="amiri">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="claude:viewport-fit-sides" content="cover">
-<title>Qamus</title>
-<meta name="theme-color" content="#f4f2ec" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#16181b" media="(prefers-color-scheme: dark)">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Qamus">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon-512.png">
-<link rel="icon" href="icon-512.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;500;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Qamus · قاموس</title>
+  <meta name="theme-color" content="#f6f3ec" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#111315" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Qamus">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-512.png">
+  <link rel="apple-touch-icon" href="icon-512.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=Noto+Naskh+Arabic:wght@400;500;600;700&family=Scheherazade+New:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="bar">
-  <div class="search-wrap">
-    <span class="brand" aria-hidden="true"><span lang="ar">قاموس</span> Qamus</span>
-    <button id="back" aria-label="Back" hidden>‹</button>
-    <div class="field">
-    <input id="q" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-           placeholder="ابحث · word, root (ك ت ب), or English" enterkeyhint="search" dir="auto">
-    <kbd class="q-kbd" aria-hidden="true">/</kbd>
-    <button id="clear" class="icon-btn" aria-label="Clear" hidden>×</button>
-    <ul id="suggest" class="suggest" role="listbox" hidden></ul>
+  <div class="app-shell" id="app-shell">
+    <!-- Left Rail (Desktop & iPad Landscape) -->
+    <aside class="rail" id="rail" aria-label="Primary navigation">
+      <div class="rail-top">
+        <a href="#" class="brand-lockup" data-nav="" aria-label="Qamus home">
+          <span class="brand-seal" aria-hidden="true">ق</span>
+          <span class="brand-text">
+            <span class="brand-ar" lang="ar">قاموس</span>
+            <span class="brand-en">Qamus</span>
+          </span>
+        </a>
+      </div>
+
+      <nav class="rail-nav" aria-label="Sections">
+        <button type="button" class="rail-btn" data-nav-tab="search" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+          <span>Dictionary</span>
+        </button>
+        <button type="button" class="rail-btn" data-nav-tab="vocab">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a.5.5 0 0 1 .5.5v16.2a.3.3 0 0 1-.48.24L12 16l-6.02 4.44a.3.3 0 0 1-.48-.24V4a.5.5 0 0 1 .5-.5z"/></svg>
+          <span>Vocab</span>
+          <span class="rail-badge" id="rail-due-badge" hidden></span>
+        </button>
+        <button type="button" class="rail-btn" data-nav-tab="history">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+          <span>History</span>
+        </button>
+      </nav>
+
+      <div class="rail-scroll" id="rail-scroll">
+        <!-- Populated dynamically: folders tree + recent lookups -->
+      </div>
+
+      <div class="rail-foot">
+        <button type="button" class="rail-foot-btn" id="theme-cycle" title="Switch theme (Paper / Sepia / Night)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32 1.41-1.41"/></svg>
+          <span id="theme-label">Paper</span>
+        </button>
+        <button type="button" class="rail-foot-btn" data-nav-tab="settings" title="Settings & Appearance">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Settings</span>
+        </button>
+        <button type="button" class="rail-acct" id="rail-acct" title="Sync account">
+          <span class="sync-dot local" id="rail-sync-dot"></span>
+          <span class="rail-acct-name" id="rail-acct-name">Local only</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Workspace Column -->
+    <div class="workspace">
+      <header class="topbar" id="topbar">
+        <div class="topbar-inner">
+          <a href="#" class="mobile-brand" data-nav="" aria-label="Qamus home">
+            <span class="brand-seal sm" aria-hidden="true">ق</span>
+          </a>
+
+          <div class="omnibox" id="omnibox">
+            <span class="omni-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+            </span>
+            <input id="q" type="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                   placeholder="Search Arabic, root (ك ت ب), or English" enterkeyhint="search" dir="auto" aria-label="Search dictionary">
+            <span class="load-pill" id="load-pill" hidden>Loading…</span>
+            <kbd class="omni-kbd" aria-hidden="true">/</kbd>
+            <button id="clear" class="omni-clear" type="button" aria-label="Clear search" hidden>×</button>
+            <ul id="suggest" class="suggest" role="listbox" aria-label="Suggestions" hidden></ul>
+          </div>
+
+          <div class="topbar-actions">
+            <button type="button" class="icon-pill mobile-only" data-nav-tab="settings" aria-label="Settings" title="Settings">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+            <button type="button" class="acct-chip mobile-only" id="mobile-acct" aria-label="Account">
+              <span class="sync-dot local" id="mobile-sync-dot"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main id="main" class="main" tabindex="-1">
+        <div class="boot-state">
+          <div class="boot-seal" lang="ar">قاموس</div>
+          <p class="muted">Preparing lexicons…</p>
+        </div>
+      </main>
     </div>
-    <button id="settings-btn" class="gear" type="button" aria-label="Settings" title="Settings" hidden>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    </button>
-    <nav id="tabs" class="tabs" aria-label="Sections" hidden>
-      <button type="button" class="tab" data-tab="search" aria-label="Search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>Search</span></button>
-      <button type="button" class="tab" data-tab="vocab" aria-label="Vocab"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a.5.5 0 0 1 .5.5v16.2a.3.3 0 0 1-.48.24L12 16l-6.02 4.44a.3.3 0 0 1-.48-.24V4a.5.5 0 0 1 .5-.5z"/></svg><span>Vocab</span><span class="tab-badge" hidden></span></button>
-      <button type="button" class="tab" data-tab="history" aria-label="History"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>History</span></button>
-    </nav>
-    <button id="acct" class="acct" type="button" aria-label="Account" hidden>
-      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
-      <span class="acct-name"></span><span class="dot local"></span>
-    </button>
   </div>
-</header>
-<div class="shell">
-  <aside id="side" class="side" aria-label="Recent searches and folders" hidden></aside>
-  <main id="main">
-    <p id="status" class="muted">Loading dictionary…</p>
-  </main>
-</div>
-<footer id="statusbar" class="statusbar" hidden>
-  <span class="stat-sync"><span class="sdot local" id="stat-dot"></span><span id="stat-text">Saved on this device</span></span>
-  <span class="stat-keys stat-keys-main" aria-hidden="true"><kbd>/</kbd> search <kbd>Esc</kbd> back <kbd>↑</kbd><kbd>↓</kbd> suggestions</span>
-  <span class="stat-keys stat-keys-study" aria-hidden="true"><kbd>Space</kbd> flip <kbd>←</kbd><kbd>→</kbd> move <kbd>1</kbd>–<kbd>4</kbd> mark / grade <kbd>Esc</kbd> leave</span>
-</footer>
-<script src="merge.js"></script>
-<script src="sync.js"></script>
-<script src="app.js"></script>
-<script src="vocab.js"></script>
-<script src="study.js"></script>
-<script src="tour.js"></script>
+
+  <!-- Mobile Bottom Navigation -->
+  <nav class="bottom-nav" id="bottom-nav" aria-label="Mobile navigation">
+    <button type="button" class="bnav-btn" data-nav-tab="search" aria-current="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>
+      <span>Search</span>
+    </button>
+    <button type="button" class="bnav-btn" data-nav-tab="vocab">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a.5.5 0 0 1 .5.5v16.2a.3.3 0 0 1-.48.24L12 16l-6.02 4.44a.3.3 0 0 1-.48-.24V4a.5.5 0 0 1 .5-.5z"/></svg>
+      <span>Vocab</span>
+      <span class="bnav-badge" id="bnav-due-badge" hidden></span>
+    </button>
+    <button type="button" class="bnav-btn" data-nav-tab="history">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
+      <span>History</span>
+    </button>
+  </nav>
+
+  <!-- Shared merge + IndexedDB store + sync engine -->
+  <script src="merge.js"></script>
+  <script src="sync.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

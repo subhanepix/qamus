@@ -1,829 +1,310 @@
-'use strict';
-// ---------- normalization (must match build.py norm()) ----------
-const DIAC = /[ؐ-ًؚ-ٰٟۖ-ۭـ]/g;
-const HAMZA = { 'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ٱ': 'ا', 'ء': 'ا', 'ؤ': 'ا', 'ئ': 'ا', 'ى': 'ي', 'ة': 'ه', 'ک': 'ك', 'ی': 'ي' };
-const norm = s => s.replace(DIAC, '').replace(/[أإآٱءؤئىةکی]/g, c => HAMZA[c]).trim();
-const isAr = s => /[؀-ۿ]/.test(s);
-const latin = s => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-  .replace(/[’‘ʿʾ'`\-\s]/g, '').replace(/ḡ|ğ/g, 'g');
-const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+import {
+  state,
+  DICTS,
+  DICT_IDS,
+  AR_DICTS,
+  AR_IDS,
+  VERB_PATTERNS,
+  PARTICLES,
+  DIAC,
+  norm,
+  isAr,
+  esc,
+  plain,
+  hasTashkeel,
+  hasExplicitHamza,
+  initEngine,
+  onEngineUpdate,
+  hwHave,
+  loadHw,
+  loadAllHw,
+  formIdx,
+  stripHead,
+  analyze,
+  uniqParses,
+  rootLabel,
+  wRoots,
+  laneKey,
+  loadLaneEntries,
+  arKeysFor,
+  arShard,
+  arHead,
+  arEntry,
+  resolveQuery,
+  suggestions,
+  glossFor,
+  nearestMatches,
+  searchEnglish,
+  defHtml,
+  arHtml,
+  bwRoot,
+  tokenIs,
+  snippet,
+  shortGloss,
+} from './engine.js';
 
-// ---------- state ----------
-let IDX = [], HW = null, M = null;
-let byId = new Map(), kids = new Map(), formsBy = new Map(), hwNorm = new Map(), formNorm = new Map();
-let AB, AC, BC, plainDefs = null;
-let W = null, wForm = new Map(), laneIdx = new Map(), laneRoots = null, laneShards = new Map();
-
-const $ = s => document.querySelector(s);
-const qEl = $('#q'), sug = $('#suggest'), main = $('#main');
-
-// ---------- sync config ----------
+// ---------- Storage & Sync Setup (reuses root ../merge.js & ../sync.js) ----------
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
-// The sync Worker's URL. Empty = local-only mode (no login UI). The localStorage key
-// `qamus.syncUrl` overrides it for local dev and tests (e.g. http://localhost:8787).
+
+const Store = window.QamusStore;
+const Sync = window.QamusSync;
+const QM = window.QamusMerge;
 const SYNC_URL = lsGet('qamus.syncUrl') ?? 'https://qamus-sync.subhansajid360.workers.dev';
-const Store = window.QamusStore, Sync = window.QamusSync;
 
-async function load() {
-  const j = u => fetch(u).then(r => { if (!r.ok) throw new Error(u); return r.json(); });
-  IDX = await j('data/index.json');
-  setStatus('');
-  route();
-  // The root lists of Lane and the Arabic dictionaries are small, so they come with the first wave: a search
-  // opened straight from a link then shows those dictionaries at once, without waiting for Wiktionary.
-  // Hans Wehr comes as its headwords only (data/hw/index.json); definitions arrive in chunks of roots (loadHw).
-  // The word analyser (morph.json, the biggest file) doesn't hold up results for words Hans Wehr has directly:
-  // it comes next, and a result already on screen is redrawn with the analysis if you haven't scrolled.
-  const [hi, lr, ...ar] = await Promise.all([j('data/hw/index.json'), j('data/lane/roots.json').catch(() => []),
-    ...AR_IDS.map(id => j(AR_DICTS[id].dir + 'roots.json').catch(() => []))]);
-  HW = { entries: hi.e.map(([id, w, isRoot, root, quran, tr]) => [id, w, null, isRoot, root, quran, tr]),
-    forms: hi.f.map(([root, n, verb]) => [root, n, verb, null]), chunks: hi.chunks };
-  laneRoots = new Set(lr);
-  AR_IDS.forEach((id, i) => { arRoots[id] = new Set(ar[i]); });
-  for (const e of HW.entries) {
-    byId.set(e[0], e);
-    if (!kids.has(e[4])) kids.set(e[4], []);
-    if (e[0] !== e[4]) kids.get(e[4]).push(e);
-    push(hwNorm, norm(e[1]), e);
-  }
-  HW.forms.forEach((f, i) => {
-    push(formsBy, f[0], f);
-    if (f[2]) push(formNorm, norm(f[2]), f);
-  });
-  for (const r of IDX) if (r[2] === 'l') push(laneIdx, r[0], r[3]);
-  route();
-  // One download at a time on a slow connection: the chunk for what's on screen goes before the analyser.
-  await Promise.allSettled([...hwChunks.values()]);
-  const m = await j('data/morph.json');
-  AB = new Set(m.AB); AC = new Set(m.AC); BC = new Set(m.BC);
-  M = m;
-  if (main.dataset.empty === '1' || view === 'loading' || (view === 'result' && window.scrollY < 80)) route();
-  // second wave: Wiktionary
-  const w = await j('data/wikt.json');
-  w.entries.forEach((e, k) => {
-    push(wForm, norm(e[0]), k);
-    if (w.forms[k]) for (const f of w.forms[k].split(' ')) push(wForm, f, k);
-  });
-  W = w;
-  if (main.dataset.empty === '1') route();   // a search that found nothing may succeed now
-  prefetchHw();
-}
+const INBOX = 'f_inbox';
+const CARD_SOURCES = ['hw', 'wikt', 'lane', 'lexicon', 'mufradat', 'mukhtar', 'custom'];
+const TEXT_FIELDS = ['word', 'gloss', 'arGloss', 'root', 'translit', 'context', 'highlight', 'note'];
+const CSV_FIELDS = ['word', 'gloss', 'arGloss', 'root', 'translit', 'context', 'note', 'tags'];
+const MARK_GOT = 1;
+const MARK_AGAIN = 2;
+const AGAIN_MS = 10 * 60000;
+const SIZE_MIN = 80, SIZE_MAX = 160, SIZE_STEP = 10;
 
-// ---------- Hans Wehr definitions, loaded by chunk (data/hw/cNNN.json, ~200 roots each) ----------
-const hwChunks = new Map();   // chunk number -> Promise (resolved once its definitions are filled in)
-function chunkOf(rootId) {
-  const c = HW.chunks; let lo = 0, hi = c.length - 1;
-  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (c[mid] <= rootId) lo = mid; else hi = mid - 1; }
-  return lo;
-}
-function loadChunk(k) {
-  if (!hwChunks.has(k)) hwChunks.set(k, fetch(`data/hw/c${String(k).padStart(3, '0')}.json`)
-    .then(r => { if (!r.ok) throw new Error('hw chunk ' + k); return r.json(); })
-    .then(c => {
-      for (const id in c.e) { const e = byId.get(+id); if (e) e[2] = c.e[id]; }
-      for (const i in c.f) { const f = HW.forms[+i]; if (f) f[3] = c.f[i]; }
-      plainDefs = null;
-    })
-    .catch(err => { hwChunks.delete(k); throw err; }));
-  return hwChunks.get(k);
-}
-const hwChunksFor = rootIds => [...new Set(rootIds.filter(r => r != null).map(chunkOf))];
-const hwHave = rootIds => hwChunksFor(rootIds).every(k => hwChunks.get(k)?.done);
-function loadHw(rootIds) {
-  return Promise.all(hwChunksFor(rootIds).map(k => loadChunk(k).then(() => { hwChunks.get(k).done = true; })));
-}
-const loadAllHw = () => loadHw(HW.chunks.map(start => start));
-// After the first visit has everything it needs, fetch the remaining chunks quietly so the offline copy fills up
-// (unless the device asks to save data). The service worker caches each one as it arrives.
-function prefetchHw() {
-  if (navigator.connection?.saveData) return;
-  const idle = window.requestIdleCallback || (f => setTimeout(f, 300));
-  let k = 0;
-  const next = () => {
-    while (k < HW.chunks.length && hwChunks.get(k)?.done) k++;
-    if (k >= HW.chunks.length) return;
-    const n = k++;
-    loadChunk(n).then(() => { hwChunks.get(n).done = true; }, () => {}).then(() => idle(next));
-  };
-  setTimeout(() => idle(next), 3000);
-}
-const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
-const setStatus = t => { const s = $('#status'); if (s) s.textContent = t; };
+const BOOKMARK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h12a.5.5 0 0 1 .5.5v16.2a.3.3 0 0 1-.48.24L12 16l-6.02 4.44a.3.3 0 0 1-.48-.24V4a.5.5 0 0 1 .5-.5z"/></svg>';
+const COPY_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 
-// ---------- morphology (Buckwalter) ----------
-function analyze(w) {
-  if (!M) return [];   // still downloading: results show what the dictionaries have directly, then redraw
-  const n = norm(w), out = [], seen = new Set();
-  for (let i = 0; i <= Math.min(5, n.length - 1); i++) {
-    const P = M.prefixes[n.slice(0, i)]; if (!P) continue;
-    for (let j = n.length; j > i; j--) {
-      const sk = n.slice(j); if (sk.length > 7) break;
-      const S = M.suffixes[sk]; if (!S) continue;
-      const St = M.stems[n.slice(i, j)]; if (!St) continue;
-      for (const p of P) for (const s of St) {
-        if (!AB.has(p[1] + ' ' + s[1])) continue;
-        for (const x of S) {
-          if (!AC.has(p[1] + ' ' + x[1]) || !BC.has(s[1] + ' ' + x[1])) continue;
-          const key = s[0] + '|' + s[2] + '|' + p[0] + '|' + x[0];
-          if (seen.has(key)) continue; seen.add(key);
-          out.push({ pre: p, stem: s, suf: x, affixLen: i + sk.length });
-        }
-      }
-    }
-  }
-  // prefer parses whose hamza spelling matches what was typed (مؤمنين -> مُؤْمِن, not مَأْمَن)
-  const raw = w.replace(DIAC, '').replace(/ٱ/g, 'ا');
-  for (const a of out) {
-    const c = (a.pre[0] + a.stem[0] + a.suf[0]).replace(DIAC, '').replace(/ٱ/g, 'ا');
-    let pen = 0;
-    if (c.length !== raw.length) pen = 0.5;
-    else for (let i = 0; i < raw.length; i++) if ('أإآءؤئى'.includes(raw[i]) && c[i] !== raw[i]) pen++;
-    a.pen = pen;
-  }
-  // Ties (same spelling fit, same affixes) go first to a word Hans Wehr also has, then to the root that occurs
-  // most in the Qur'an. So المؤمنين reads as مُؤْمِن "believer" (Hans Wehr's mu'min), not مُؤَمِّن "guarantor".
-  for (const a of out) {
-    a.hw = hwHasWord(a.stem);
-    a.qc = Math.max(0, ...a.stem[5].map(id => byId.get(id)?.[5] || 0));
-  }
-  out.sort((a, b) => a.pen - b.pen || a.affixLen - b.affixLen || a.hw - b.hw || b.qc - a.qc);
-  return out;
-}
-// A rough Latin spelling of a vowelled Arabic word, comparable with latin() of Hans Wehr's transliterations:
-// مُؤْمِن -> "mumin" (Hans Wehr: mu'min), مُؤَمِّن -> "muammin", كِتَاب -> "kitab".
-const AR_LAT = { 'ب': 'b', 'ت': 't', 'ث': 't', 'ج': 'j', 'ح': 'h', 'خ': 'k', 'د': 'd', 'ذ': 'd', 'ر': 'r', 'ز': 'z', 'س': 's', 'ش': 's',
-  'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z', 'غ': 'g', 'ف': 'f', 'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h' };
-function vocLatin(w) {
-  let out = '', prev = '';
-  for (const c of w) {
-    if (c === '\u064E') out += 'a'; else if (c === '\u0650') out += 'i'; else if (c === '\u064F') out += 'u';
-    else if (c === '\u0651') out = /[aiu]$/.test(out) ? out.slice(0, -1) + prev + out.slice(-1) : out + prev;   // shadda doubles the consonant (it may follow the vowel mark)
-    else if (c === 'ا' || c === 'ى' || c === 'آ') out += 'a';
-    else if (c === 'و') out += /[u]$/.test(out) ? 'u' : 'w';
-    else if (c === 'ي') out += /[i]$/.test(out) ? 'i' : 'y';
-    else if (c === 'ة') out += /a$/.test(out) ? '' : 'a';
-    else if (AR_LAT[c]) { out += AR_LAT[c]; prev = AR_LAT[c]; continue; }
-    // hamza, ʿayn, sukūn, tanwīn and anything else add nothing
-  }
-  return out.replace(/([aiu])\1+/g, '$1');                         // long vowels as short, like latin()
-}
-let hwLat = null;   // root id -> Map(latin() spelling, final vowel dropped -> 0 own entry | 1 inside a phrase)
-const trimV = s => s.replace(/[aiu]+$/, '');
-// 0: Hans Wehr has the word as an entry of its own; 1: only inside a phrase (مؤمن عليه mu'amman 'alaihi); 2: not at all
-function hwHasWord(stem) {
-  if (!HW || !stem[5].length) return 2;
-  if (!hwLat) {
-    hwLat = new Map();
-    for (const e of HW.entries) if (e[6]) {
-      if (!hwLat.has(e[4])) hwLat.set(e[4], new Map());
-      const m = hwLat.get(e[4]), single = !/\s/.test(e[1].trim());
-      String(e[6]).split(/[,;/]| or /).forEach((t, i) => {
-        const l = trimV(latin(t)); if (!l) return;
-        const sc = single && i === 0 && !/\s/.test(t.trim()) ? 0 : 1;
-        if (!m.has(l) || m.get(l) > sc) m.set(l, sc);
-      });
-    }
-  }
-  const v = trimV(vocLatin(stem[4] || stem[0]));
-  return Math.min(2, ...stem[5].map(id => hwLat.get(id)?.get(v) ?? 2));
-}
+const $ = s => document.querySelector(s);
+const main = $('#main');
+const qEl = $('#q');
+const sugEl = $('#suggest');
+const clearBtn = $('#clear');
+const loadPill = $('#load-pill');
+const railScroll = $('#rail-scroll');
 
-// ---------- autocomplete ----------
-function lowerBound(key) {
-  let lo = 0, hi = IDX.length;
-  while (lo < hi) { const mid = (lo + hi) >> 1; if (IDX[mid][0] < key) lo = mid + 1; else hi = mid; }
-  return lo;
-}
-function suggestions(q) {
-  const n = norm(q).replace(/\s+/g, '');
-  if (!n) return [];
-  if (!isAr(n)) return latinSuggest(q);
-  const out = [];
-  for (let i = lowerBound(n); i < IDX.length && IDX[i][0].startsWith(n) && out.length < 400; i++) out.push(IDX[i]);
-  const pri = { h: 0, f: 1, b: 2 };
-  out.sort((a, b) => (a[0] !== n) - (b[0] !== n) || a[0].length - b[0].length || pri[a[2]] - pri[b[2]]);
-  // dedupe identical displays (same word under several roots stays; exact dup rows go)
-  const seen = new Set(), res = [];
-  for (const r of out) { const k = r[1] + r[2] + r[3]; if (!seen.has(k)) { seen.add(k); res.push(r); } if (res.length >= 12) break; }
-  return res;
-}
-function latinSuggest(q) {
-  if (!HW) return [];
-  const l = latin(q); if (l.length < 2) return [];
-  const res = [];
-  for (const e of HW.entries) if (e[6] && latin(e[6]).startsWith(l)) { res.push([norm(e[1]), e[1], 'h', String(e[0])]); if (res.length > 40) break; }
-  res.sort((a, b) => latin(byId.get(+a[3])[6]).length - latin(byId.get(+b[3])[6]).length);
-  return res.slice(0, 10);
-}
-function glossFor(r) {
-  if (!HW) return '';
-  if ((r[2] === 'h' || r[2] === 'f') && !hwHave([r[2] === 'h' ? byId.get(+r[3])?.[4] : HW.forms[+r[3]]?.[0]])) refillSuggest(r);
-  if (r[2] === 'h') { const e = byId.get(+r[3]); if (!e) return ''; let d = plain(stripHead(e)); if (e[6] && d.startsWith(e[6])) d = d.slice(e[6].length).trim(); return (e[6] ? e[6] + ' · ' : '') + d.slice(0, 80); }
-  if (r[2] === 'f') { const f = HW.forms[+r[3]]; return 'Form ' + f[1] + (f[3] ? ' · ' + plain(f[3]).slice(0, 70) : ''); }
-  if (r[2] === 'b') { const s = M ? (M.stems[r[3]] || [])[0] : null; return s ? s[2].replace(/;/g, '; ') : ''; }
-  if (r[2] === 'w') { const e = W?.entries[+r[3]]; return e ? (e[1] ? e[1] + ' · ' : '') + wGloss(e) : 'Wiktionary'; }
-  if (r[2] === 'l') return 'Lane’s Lexicon · root ' + [...r[3]].join(' ');
-  return '';
-}
-let sel = -1, cur = [];
-// A suggestion whose definition isn't loaded yet shows its transliteration; fetch it and redraw the list.
-let refillT = null;
-function refillSuggest(r) {
-  const rid = r[2] === 'h' ? byId.get(+r[3])?.[4] : HW.forms[+r[3]]?.[0];
-  loadHw([rid]).then(() => { clearTimeout(refillT); refillT = setTimeout(() => { if (!sug.hidden) renderSuggest(); }, 30); }, () => {});
-}
-function renderSuggest() {
-  const q = qEl.value;
-  $('#clear').hidden = !q;
-  cur = suggestions(q); sel = -1;
-  if (!cur.length || document.activeElement !== qEl) { sug.hidden = true; return; }
-  sug.innerHTML = cur.map((r, i) => {
-    const isRoot = r[2] === 'h' && HW && byId.get(+r[3])?.[3];
-    const tag = r[2] === 'f' ? `<span class="tag">Form ${HW.forms[+r[3]][1]}</span>` : isRoot ? '<span class="tag root">root</span>' : r[2] === 'b' ? '<span class="tag">lexicon</span>' : r[2] === 'w' ? '<span class="tag">wiktionary</span>' : r[2] === 'l' ? '<span class="tag">lane</span>' : '';
-    return `<li role="option" data-i="${i}"><span class="w" lang="ar">${esc(r[1])}</span><span class="g">${esc(glossFor(r))}</span>${tag}</li>`;
-  }).join('');
-  sug.hidden = false;
-}
-function pick(r) {
-  sug.hidden = true; qEl.blur();
-  if (r[2] === 'h') go({ e: r[3], q: r[1] });
-  else if (r[2] === 'f') go({ f: r[3], q: r[1] });
-  else if (r[2] === 'w') go({ w: r[3], q: r[1] });
-  else go({ q: r[1] });
-}
-
-// ---------- routing ----------
-// In the Claude preview the hash can't carry state, so keep a small in-page history instead.
-const MEM = !!window.QAMUS_MEMORY_ROUTER;
-let memStack = [], memCur = '';
-// Where Settings was opened from, so its Back button (and Esc, and the gear again) return there.
-let beforeSettings = null;   // { route, scroll } of the last screen that wasn't Settings
-let navDepth = 0;   // in-app navigations so far; tells #account whether "back" stays inside the app
-function go(params) {   // params: object of hash params, or a bare route name like 'history'
-  const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
-  navDepth++;
-  // opening Settings from inside the app (the gear, or the "hidden results" link): remember where we were
-  if (h === 'settings' && view !== 'settings' && beforeSettings) Object.assign(beforeSettings, { scroll: window.scrollY, inApp: true });
-  if (MEM) { if (memCur && memCur !== h) memStack.push(memCur); memCur = h; return route(); }
-  if (location.hash === '#' + h) route(); else location.hash = '#' + h;
-}
-function back() { if (memStack.length) { memCur = memStack.pop(); route(); } else { memCur = ''; qEl.value = ''; route(); } }
-if (!MEM) window.addEventListener('hashchange', route);
-function route() {
-  const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
-  if (!p.has('settings')) beforeSettings = { route: MEM ? memCur : location.hash.slice(1), scroll: 0, inApp: false };
-  else if (beforeSettings && !beforeSettings.inApp) beforeSettings = null;   // a link straight to #settings: nothing to go back to
-  const bk = document.getElementById('back'); if (bk) bk.hidden = !memCur;
-  const q = p.get('q') || '';
-  const name = routeName(p);
-  if (q && qEl.value !== q && document.activeElement !== qEl) qEl.value = q;
-  if (!q && name !== 'account' && document.activeElement !== qEl) qEl.value = '';   // no stale lookup on other screens
-  $('#clear').hidden = !qEl.value;
-  setTab(name);
-  renderSide();
-  document.title = pageTitle(name, p);
-  document.body.classList.toggle('studying', name === 'study');
-  if (!p.has('history')) histConfirm = false;
-  if (name === 'account') return accountRoute();
-  if (p.has('settings')) return settingsView();
-  if (p.has('history') && Store) return historyView();
-  if (p.has('vocab') && hasVocab()) return vocabView();
-  if (p.get('folder') && hasVocab()) return folderView(p.get('folder'));
-  if (p.get('study') && hasVocab() && typeof studyView === 'function') return studyView(p.get('study').split(','), p.get('mode'));
-  if (!HW) { if (q || p.get('e') || p.get('f') || p.get('w')) { view = 'loading'; main.innerHTML = '<p class="muted">Loading dictionary…</p>'; } else home(); return; }
-  view = 'result';
-  if (p.get('e')) showEntry(+p.get('e'));
-  else if (p.get('f')) { const f = HW.forms[+p.get('f')]; showRoots([f[0]], { forms: [f], force: 'hw' }, q); }
-  else if (p.get('w')) { if (!W) { view = 'loading'; main.innerHTML = '<p class="muted">Loading Wiktionary…</p>'; return; } const k = +p.get('w'); showRoots(wRoots(k), { wikt: [k], force: 'wikt' }, q); }
-  else if (q.trim()) search(q);
-  else return home();
-  if (q) recordSearch(q);   // a result view is on screen: record it (never on keystrokes)
-}
-
-function routeName(p) {
-  if (p.has('history')) return 'history';
-  if (p.has('settings')) return 'settings';
-  if (p.has('vocab')) return 'vocab';
-  if (p.get('folder')) return 'folder';
-  if (p.get('study')) return 'study';
-  if (p.has('account')) return 'account';
-  if (p.get('q') || p.get('e') || p.get('f') || p.get('w')) return 'result';
-  return 'home';
-}
-function pageTitle(name, p) {
-  const fname = id => (typeof folderById === 'function' && Store ? folderById(id)?.name : '') || '';
-  const ids = (p.get('study') || '').split(',').filter(Boolean);
-  const t = {
-    result: p.get('q') || '',
-    vocab: 'Vocab', history: 'History', account: 'Account', settings: 'Settings',
-    folder: fname(p.get('folder')),
-    study: 'Study · ' + (ids.length > 1 ? `${ids.length} folders` : fname(ids[0])),
-  }[name];
-  return t ? `${t} · Qamus` : 'Qamus';
-}
-
-// ---------- settings page ----------
-function settingsView() {
-  main.dataset.empty = '';
-  const pr = resultPrefs(), n = pr.order.length;
-  const sizeRow = (k, name, desc, sample) => {
-    const v = pr.size[k];
-    return `<li class="set-row size-row" data-size="${k}"><span class="set-text"><span class="set-name">${name}</span><span class="set-desc">${desc}</span>
-        <span class="size-sample size-${k}" aria-hidden="true">${sample}</span></span>
-      <span class="stepper" role="group" aria-label="${name} text size">
-        <button type="button" class="step" data-size-step="${k}" data-d="-1" aria-label="Smaller" ${v <= SIZE_MIN ? 'disabled' : ''}>A−</button>
-        <output id="size-${k}" aria-live="polite">${v}%</output>
-        <button type="button" class="step big" data-size-step="${k}" data-d="1" aria-label="Larger" ${v >= SIZE_MAX ? 'disabled' : ''}>A+</button></span></li>`;
-  };
-  const row = (id, i) => {
-    const d = DICTS.find(x => x.id === id), isOn = !pr.off.has(id);
-    return `<li class="set-row${isOn ? '' : ' off'}" data-dict="${id}">
-      <span class="set-pos" aria-hidden="true">${i + 1}</span>
-      <label class="switch set-switch"><input type="checkbox" data-dict-on="${id}" ${isOn ? 'checked' : ''}><span class="track" aria-hidden="true"></span>
-        <span class="set-text"><span class="set-name">${esc(d.name)}</span><span class="set-desc">${esc(d.desc)}</span></span></label>
-      <button type="button" class="set-drag" data-id="${id}" aria-label="Reorder ${esc(d.name)}, position ${i + 1} of ${n}. Drag, or use the up and down arrow keys."
-        title="Drag to reorder"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button></li>`;
-  };
-  const allOff = pr.order.every(id => pr.off.has(id));
-  const bl = settingsBackLabel();
-  renderKeepingFocus('settings', `<nav class="crumbs set-back-bar"><button type="button" class="set-back" id="set-back">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to ${bl.ar ? `<span lang="ar">${esc(bl.text)}</span>` : esc(bl.text)}</span></button></nav>
-    <h2 class="set-title">Settings</h2>
-    <h2 class="sec">Dictionaries</h2>
-    <p class="set-note muted">Results show in this order; drag a row by its handle to change it. Turn a dictionary off to hide it from search results. An entry you open from Vocab or a link still shows.</p>
-    <ol class="set-list" id="set-dicts">${pr.order.map(row).join('')}</ol>
-    ${allOff ? '<p class="form-msg err set-warn">Every dictionary is off, so searches will only show the word analysis.</p>' : ''}
-    <h2 class="sec">Word analysis</h2>
-    <ul class="set-list"><li class="set-row"><label class="switch set-switch"><input type="checkbox" id="set-parse" ${pr.parse ? 'checked' : ''}><span class="track" aria-hidden="true"></span>
-      <span class="set-text"><span class="set-name">Show the “Parsed” breakdown</span><span class="set-desc">Prefix · stem · suffix, with what each part means</span></span></label></li></ul>
-    <h2 class="sec">Text size</h2>
-    <ul class="set-list">${sizeRow('en', 'English dictionaries', 'Hans Wehr, Wiktionary, the lexicon and Lane', 'to write; to record, put down in writing <span class="ar">كَتَبَ</span>')}
-      ${sizeRow('ar', 'Arabic dictionaries', 'al-Mufradāt and Mukhtār al-Ṣiḥāḥ', '<span dir="rtl" lang="ar">الْكُتَّابُ بِالضَّمِّ وَالتَّشْدِيدِ الْكَتَبَةُ</span>')}</ul>
-    <div class="actions"><button type="button" class="btn quiet" id="set-reset">Reset to defaults</button></div>
-    ${typeof startTour === 'function' ? `<h2 class="sec">Help</h2>
-    <ul class="set-list"><li class="set-row"><span class="set-text"><span class="set-name">The intro tour</span><span class="set-desc">A short walk through searching, saving and studying</span></span>
-      <button type="button" class="btn" id="set-tour">Show the intro again</button></li></ul>` : ''}
-    ${Store ? (SYNC_URL ? '<p class="set-note muted">These settings sync to your other devices.</p>' : '') : '<p class="set-note muted">Settings can’t be saved in this preview.</p>'}`);
-}
-main.addEventListener('change', e => {
-  if (view !== 'settings') return;
-  const t = e.target, pr = resultPrefs();
-  if (t.dataset.dictOn) { const off = new Set(pr.off); if (t.checked) off.delete(t.dataset.dictOn); else off.add(t.dataset.dictOn); setResultPrefs({ off }); main.querySelector(`[data-dict-on="${t.dataset.dictOn}"]`)?.focus(); }
-  else if (t.id === 'set-parse') { setResultPrefs({ parse: t.checked }); $('#set-parse')?.focus(); }
-});
-main.addEventListener('click', e => {
-  if (view !== 'settings') return;
-  const b = e.target.closest('button');
-  if (!b) return;
-  if (b.id === 'set-back') return leaveSettings();
-  if (b.id === 'set-tour') { go(''); return setTimeout(() => startTour(), 50); }
-  if (b.id === 'set-reset') {
-    setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
-    $('#set-reset')?.focus();
-  } else if (b.dataset.sizeStep) {
-    const k = b.dataset.sizeStep, d = +b.dataset.d, size = { ...resultPrefs().size };
-    size[k] = textSize(size[k] + d * SIZE_STEP);
-    setResultPrefs({ size });
-    // keep focus on a usable button: the same one, or its partner once this end is reached
-    const btns = main.querySelectorAll(`[data-size-step="${k}"]`);
-    const same = [...btns].find(x => +x.dataset.d === d);
-    (same && !same.disabled ? same : [...btns].find(x => !x.disabled))?.focus();
-  }
-});
-
-// Reorder dictionaries: drag a row by its handle (touch, pen or mouse), or arrow keys on the handle.
-function moveDict(id, to) {
-  const order = resultPrefs().order.filter(x => x !== id);
-  order.splice(Math.max(0, Math.min(to, order.length)), 0, id);
-  setResultPrefs({ order });
-  main.querySelector(`.set-drag[data-id="${id}"]`)?.focus();
-}
-main.addEventListener('keydown', e => {
-  const h = view === 'settings' && e.target.closest?.('.set-drag');
-  if (!h || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
-  e.preventDefault();
-  const i = resultPrefs().order.indexOf(h.dataset.id);
-  moveDict(h.dataset.id, i + (e.key === 'ArrowUp' ? -1 : 1));
-});
-let dictDrag = null;
-main.addEventListener('pointerdown', e => {
-  const h = view === 'settings' && e.target.closest('.set-drag');
-  if (!h || e.button !== 0) return;
-  e.preventDefault();
-  const row = h.closest('.set-row');
-  dictDrag = { row, list: row.parentElement, handle: h, pid: e.pointerId, y0: e.clientY, top0: row.getBoundingClientRect().top, shift: 0 };
-  row.classList.add('dragging');
-  try { h.setPointerCapture(e.pointerId); } catch {}
-});
-main.addEventListener('pointermove', e => {
-  const d = dictDrag;
-  if (!d || e.pointerId !== d.pid) return;
-  e.preventDefault();
-  // put the row before the first sibling whose middle is below the pointer
-  const before = [...d.list.children].find(r => r !== d.row && e.clientY < r.getBoundingClientRect().top + r.offsetHeight / 2) || null;
-  if (before !== d.row.nextElementSibling) d.list.insertBefore(d.row, before);
-  // then keep it under the pointer: offset from where the row now sits without its transform
-  const natural = d.row.getBoundingClientRect().top - d.shift;
-  d.shift = e.clientY - d.y0 - (natural - d.top0);
-  d.row.style.transform = `translateY(${d.shift}px)`;
-});
-function endDictDrag(e) {
-  const d = dictDrag;
-  if (!d || e.pointerId !== d.pid) return;
-  dictDrag = null;
-  d.row.style.transform = '';
-  d.row.classList.remove('dragging');
-  const order = [...d.list.children].map(r => r.dataset.dict);
-  if (order.join() !== resultPrefs().order.join()) setResultPrefs({ order });
-  main.querySelector(`.set-drag[data-id="${d.handle.dataset.id}"]`)?.focus({ preventScroll: true });
-}
-main.addEventListener('pointerup', endDictDrag);
-main.addEventListener('pointercancel', endDictDrag);
-
-$('#settings-btn')?.addEventListener('click', () => {
-  if (view === 'settings') return leaveSettings();          // the gear toggles Settings
-  go('settings');
-});
-function settingsBackLabel() {
-  const p = new URLSearchParams(beforeSettings?.route || '');
-  const q = p.get('q') || '';
-  if (routeName(p) === 'result' && q) return { text: q, ar: isAr(q) };
-  return { text: 'Search', ar: false };
-}
-function leaveSettings() {
-  const from = beforeSettings;
-  if (!from || !from.inApp) return go('');                  // opened from a link: go to the search home
-  // The Arabic sections fill in a moment after the result renders, which can shift the page; put the
-  // position back again once they have, unless you've scrolled in the meantime.
-  const restore = () => requestAnimationFrame(() => requestAnimationFrame(() => {
-    window.scrollTo(0, from.scroll);
-    let set = window.scrollY;
-    const again = () => { if (Math.abs(window.scrollY - set) < 4) { window.scrollTo(0, from.scroll); set = window.scrollY; } };
-    Promise.all([...arShards.values()]).catch(() => {}).then(() => requestAnimationFrame(again));
-    setTimeout(again, 300);
-  }));
-  if (MEM) { back(); return restore(); }
-  window.addEventListener('hashchange', restore, { once: true });
-  history.back();                                           // back to the result, without a new history entry
-}
-
-// ---------- side panel (wide screens): recent searches and the folder tree ----------
-const sideEl = $('#side');
-function shortTime(t) {
-  const s = (Date.now() - t) / 1000;
-  return s < 60 ? 'now' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h'
-    : s < 86400 * 30 ? Math.round(s / 86400) + 'd' : new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-function renderSide() {
-  if (!sideEl || !Store || sideEl.hidden) return;
-  const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
-  const curQ = p.get('q') || '', curF = p.get('folder') || '';
-  const cur = on => (on ? ' on" aria-current="true' : '');
-  const recent = liveHistory().slice(0, 14);
-  let h = `<section class="side-sec" aria-label="Recent searches"><div class="side-h"><span>Recent</span>${recent.length ? '<a class="side-more" href="#history" data-sgo="history">All</a>' : ''}</div>` +
-    (recent.length ? `<ul class="side-list">${recent.map(({ q, t }) => `<li><a class="side-item${cur(q === curQ)}" href="#q=${encodeURIComponent(q)}" data-sq="${esc(q)}"><span class="side-w" ${qAttr(q)}>${esc(q)}</span><span class="side-n">${shortTime(t)}</span></a></li>`).join('')}</ul>`
-      : '<p class="side-empty">Words you look up appear here.</p>') + '</section>';
-  if (hasVocab()) {
-    const rows = tree(), due = dueCount(liveCards());
-    h += `<section class="side-sec" aria-label="Folders"><div class="side-h"><span>Folders</span>${due ? `<span class="side-due">${due} due</span>` : ''}</div>` +
-      (rows.length ? `<ul class="side-list">${rows.map(({ f, depth }) => {
-        const cs = cardsDeep(f.id), d = dueCount(cs);
-        return `<li><a class="side-item${cur(f.id === curF)}" style="--depth:${depth}" href="#folder=${encodeURIComponent(f.id)}" data-sgo="folder=${esc(f.id)}"><span class="side-w" dir="auto">${esc(f.name)}</span><span class="side-n${d ? ' due' : ''}">${isPaused(f.id) ? 'paused' : d ? d + ' due' : cs.length}</span></a></li>`;
-      }).join('')}</ul>` : '<p class="side-empty">Save a word with the bookmark to start a folder.</p>') + '</section>';
-  }
-  sideEl.innerHTML = h;
-}
-sideEl?.addEventListener('click', e => {
-  const a = e.target.closest('a');
-  if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
-  e.preventDefault();
-  if (a.dataset.sq != null) go({ q: a.dataset.sq }); else if (a.dataset.sgo) go(a.dataset.sgo);
-});
-
-// ---------- status bar (wide screens): where your data is, and the keys that work here ----------
-function renderStat(st) {
-  const dot = $('#stat-dot'), text = $('#stat-text');
-  if (!dot || !text) return;
-  const user = SYNC_URL && st?.user;
-  dot.className = 'sdot ' + (user ? st.status : 'local');
-  text.textContent = !SYNC_URL ? 'Saved on this device · sync is off' : !user ? 'Saved on this device · not signed in'
-    : `${st.user} · ` + ({ synced: st.lastSync ? `synced ${relTime(st.lastSync)}` : 'synced', syncing: 'syncing…', offline: 'offline, changes saved here', error: 'sync problem' }[st.status] || st.status)
-      + (st.dirty && st.status !== 'syncing' ? ' · unsynced changes' : '');
-}
-
-// ---------- tabs: Search · Vocab · History ----------
-const tabsEl = $('#tabs');
-const TAB_OF = { home: 'search', result: 'search', settings: 'search', account: null, vocab: 'vocab', folder: 'vocab', study: 'vocab', history: 'history' };
-const setBtn = $('#settings-btn');
-function setTab(name) {
-  if (setBtn) {
-    setBtn.hidden = !['home', 'result', 'settings'].includes(name);
-    if (name === 'settings') setBtn.setAttribute('aria-current', 'page'); else setBtn.removeAttribute('aria-current');
-  }
-  if (!tabsEl) return;
-  const on = hasVocab();
-  tabsEl.hidden = !on;
-  document.body.classList.toggle('has-tabs', on);
-  if (!on) return;
-  const active = TAB_OF[name];
-  if (active !== null) for (const b of tabsEl.querySelectorAll('[data-tab]')) {
-    if (b.dataset.tab === active) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
-  }
-  updateTabBadge();
-}
-function updateTabBadge() {
-  if (!tabsEl || !hasVocab()) return;
-  const n = dueCount(liveCards());
-  const badge = tabsEl.querySelector('.tab-badge'), tab = badge.closest('.tab');
-  badge.hidden = !n;
-  badge.textContent = n > 99 ? '99+' : String(n);
-  tab.setAttribute('aria-label', n ? `Vocab, ${n} due` : 'Vocab');
-}
-tabsEl?.addEventListener('click', e => {
-  const b = e.target.closest('[data-tab]');
-  if (!b) return;
-  const t = b.dataset.tab;
-  if (t !== 'search') return go(t);
-  if (view === 'home') { qEl.focus(); qEl.select(); }
-  else { qEl.value = ''; go(''); }
-});
-
-// ---------- #account: the account sheet as a route ----------
-let accountOpen = false;
-function accountRoute() {
-  if (!SYNC_URL || !Sync) return home();   // local-only mode has no login UI
-  if (!view || view === 'loading') home();
-  if (accountOpen) return;
-  accountOpen = true;
-  accountSheet({ onClose: leaveAccount });
-}
-function leaveAccount() {
-  accountOpen = false;
-  const p = new URLSearchParams(MEM ? memCur : location.hash.slice(1));
-  if (!p.has('account')) return;           // the sheet closed because we navigated elsewhere
-  if (MEM) return back();
-  if (navDepth > 0) return history.back();
-  history.replaceState(null, '', location.pathname + location.search);   // deep link: don't leave a dead entry
-  route();
-}
-
-// ---------- views ----------
-const qAttr = q => isAr(q) ? 'lang="ar"' : 'dir="auto"';
-// Home greeting: "Welcome back, <username>" when signed in, plus the time of day and the last lookup.
-let greetedUser = '';
-function welcomeBanner(last) {
-  const user = (SYNC_URL && Sync?.state.user) || '';
-  greetedUser = user;
-  const hr = new Date().getHours();
-  const tod = hr >= 5 && hr < 12 ? 'Good morning' : hr >= 12 && hr < 18 ? 'Good afternoon' : 'Good evening';
-  const title = user ? `Welcome back, <span class="wb-name">${esc(user)}</span>` : last ? 'Welcome back' : 'Welcome to Qamus';
-  let sub = `${tod}.`;
-  if (last) {
-    const rt = relTime(last.t);
-    sub += ` You last looked up <span ${qAttr(last.q)}>${esc(last.q)}</span> ${/ago|now/.test(rt) ? rt : 'on ' + rt}.`;
-  } else sub += ' Look up a word to get started.';
-  return `<section class="welcome" aria-labelledby="wb-title"><p class="wb-ar" lang="ar">أهلًا وسهلًا</p>
-    <h1 class="wb-title" id="wb-title">${title}</h1>
-    <p class="wb-sub">${sub}</p></section>
-    <p class="credit">inspired by Youssef Z.</p>`;
-}
-// Home's study card: what's due today and a button straight into review. Hidden until you've saved a word.
-function homeStudy() {
-  if (!hasVocab()) return '';
-  const cards = liveCards();
-  if (!cards.length) return '';
-  const dueCards = cards.filter(isDue);
-  const ids = [...new Set(dueCards.map(cardFolder))];
-  const big = dueCards.length ? `<b>${dueCards.length}</b> ${dueCards.length === 1 ? 'card' : 'cards'} to study`
-    : 'All caught up';
-  const meta = dueCards.length ? `${ids.length > 1 ? `across ${ids.length} folders · ` : ''}${plural(cards.length, 'word')} saved`
-    : `Nothing due today · ${plural(cards.length, 'word')} saved`;
-  return `<section class="home-study${dueCards.length ? ' due' : ''}" aria-labelledby="hs-title">
-    <div class="hs-text"><h2 class="hs-k" id="hs-title">Study</h2><p class="hs-big">${big}</p><p class="hs-meta">${meta}</p></div>
-    <div class="hs-actions">${dueCards.length ? `<button type="button" class="btn primary" data-go="${esc(studyHash(ids, 'review'))}">Review now</button>` : ''}
-      <button type="button" class="btn ${dueCards.length ? 'quiet' : ''}" data-go="vocab">Open Vocab</button></div></section>`;
-}
-// Qamus moved from GitHub Pages to its own address. The old copy says so on its home screen: the browser keeps
-// each address's saved words apart, so synced words come across by signing in there, and words on a device
-// that isn't syncing need sync turned on first.
-const NEW_HOME = 'https://alqamus.pages.dev';
-const OLD_HOME = location.hostname === 'subhanepix.github.io' || !!window.QAMUS_FORCE_MOVED;
-function movedNotice() {
-  if (!OLD_HOME) return '';
-  const user = (SYNC_URL && Sync?.state.user) || '';
-  const how = user
-    ? `Sign in there with <code class="key">${esc(user)}</code> <button type="button" class="btn quiet" id="mv-copy">Copy</button> and your words come with you.`
-    : SYNC_URL ? 'Words saved on this device don’t move by themselves: tap the account button, turn on sync, then sign in there with the same username.'
-      : '';
-  return `<section class="moved" role="status"><p class="mv-title">Qamus has a new home: <a href="${NEW_HOME}/">${NEW_HOME.replace('https://', '')}</a></p>
-    ${how ? `<p class="mv-how">${how}</p>` : ''}<a class="btn primary" href="${NEW_HOME}/">Open the new site</a></section>`;
-}
-main.addEventListener('click', e => {
-  const b = e.target.closest('#mv-copy'); if (!b) return;
-  navigator.clipboard?.writeText(Sync.state.user).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }, () => {});
-});
-function home() {
-  view = 'home';
-  const h = liveHistory().slice(0, HIST_HOME);
-  main.innerHTML = `${movedNotice()}${homeStudy()}${welcomeBanner(h[0])}
-    ${h.length ? `<div class="sec-row home-recent"><h2 class="sec">Recent searches</h2>${Store ? '<button type="button" class="see-all" data-go="history">See all</button>' : ''}</div>
-    <ul class="recent-grid home-recent">${h.map(({ q, t }) => `<li><button type="button" class="recent-tile" data-q="${esc(q)}"><span class="rt-w" ${qAttr(q)}>${esc(q)}</span><span class="rt-t">${relTime(t)}</span></button></li>`).join('')}</ul>` : ''}
-    <h2 class="sec">How to search</h2>
-    <div class="empty home-help"><dl class="howto">
-      <dt lang="ar">كتاب · يكتبون</dt><dd>An Arabic word in any inflection. Prefixes and suffixes are stripped automatically.</dd>
-      <dt lang="ar">ك ت ب</dt><dd>A root, with spaces or dashes between the letters.</dd>
-      <dt>book · kitab</dt><dd>English, or a transliteration.</dd></dl>
-      <p class="muted howto-note">Hamzas, harakat, ة/ه and ى/ي don’t matter.</p></div>`;
-}
-
-function search(q) {
-  q = q.trim(); if (!q) return home();
-  if (!isAr(q)) return englishSearch(q);
-
-  // root syntax: letters separated by spaces/hyphens/dots, e.g. ك ت ب
-  const letters = q.split(/[\s\-–.،,]+/).filter(Boolean);
-  if (letters.length >= 2 && letters.every(x => norm(x).length === 1)) {
-    const r = rootIdsFor(norm(letters.join('')));
-    if (r.length) return showRoots(r, {}, q);
-    if (arHas(norm(letters.join('')))) return showRoots([], { arWord: letters.join('') }, q);
-  }
-
-  const words = q.split(/\s+/).filter(Boolean);
-  if (words.length > 1) return multiWord(words);
-
-  const r = lookupWord(q);
-  if (r) return showRoots(r.roots, r.opt, q);
-  // Nothing matched: try the word without a leading ال (or وال, بال…), then without an emphatic ن.
-  for (const v of retryForms(q)) {
-    const rv = lookupWord(v.word);
-    if (!rv) continue;
-    // ال only ever goes on a noun or adjective, so after taking it off, a verb reading can't be right
-    // (التناوش is the noun تَنَاوُش, not the verb تُنَاوِش). The analyser applies the same rule when it reads ال itself.
-    if (v.why === 'al') { rv.opt.parses = rv.opt.parses.filter(isNominal); rv.opt.bwOnly = rv.opt.bwOnly.filter(isNominal); }
-    return showRoots(rv.roots, { ...rv.opt, retry: { from: q, ...v } }, v.word);
-  }
-  fallback(q, norm(q));
-}
-
-// The dictionary lookups and the morphological analysis for one word. null when nothing at all matches.
-function lookupWord(q) {
-  const n = norm(q);
-  const hits = new Set(), forms = [], roots = [];
-  const addRoot = id => { if (id != null && !roots.includes(id)) roots.push(id); };
-  for (const e of hwNorm.get(n) || []) { if (e[3]) addRoot(e[0]); }
-  for (const e of hwNorm.get(n) || []) { hits.add(e[0]); addRoot(e[4]); }
-  for (const f of formNorm.get(n) || []) { forms.push(f); addRoot(f[0]); }
-  const wikt = [...new Set(wForm.get(n) || [])].slice(0, 8);
-  for (const k of wikt) wRoots(k).forEach(addRoot);
-  const laneOnly = [], laneHit = new Set(laneIdx.get(n) || []);
-  for (const lr of laneHit) { const ids = rootIdsFor(lr); if (ids.length) ids.forEach(addRoot); else laneOnly.push(lr); }
-
-  const parses = analyze(q);
-  const bwOnly = [];
-  for (const a of parses) {
-    if (a.stem[5].length) a.stem[5].forEach(addRoot);
-    else bwOnly.push(a);
-  }
-  // mark HW words matching the parsed stems/lemmas
-  for (const a of parses) for (const k of [norm(a.stem[0]), norm(a.stem[4] || '')]) for (const e of hwNorm.get(k) || []) if (roots.includes(e[4])) hits.add(e[0]);
-  // Hamza spelling is ignored when matching, so مؤمن also finds مأمن. If a headword is spelled exactly as typed,
-  // highlight just that one (Hans Wehr often writes headwords without hamza, so this only narrows when it can).
-  const typed = q.replace(DIAC, '').trim(), exact = [...hits].filter(id => byId.get(id)?.[1] === typed);
-  if (exact.length && exact.length < hits.size) { hits.clear(); exact.forEach(id => hits.add(id)); }
-
-  const arWord = roots.length ? '' : n;   // a root only the Arabic dictionaries have
-  if (!roots.length && !bwOnly.length && !wikt.length && !laneOnly.length && !arHas(n)) return null;
-  const directHit = hits.size || forms.length || wikt.length;
-  return { roots, opt: { hits, forms, parses: directHit && !parses.some(a => a.affixLen) ? [] : parses, bwOnly, wikt, laneOnly, laneWord: laneHit.size ? n : '', arWord } };
-}
-
-// Other spellings to try when a word matches nothing, in order:
-// 1. without a leading ال, وال, بال, فال, كال or لل (الكمبيوترات -> كمبيوترات);
-// 2. (the analysis found nothing too, or we wouldn't be here) without the emphatic نّ: before a pronoun ending
-//    (تغرنكم -> تغركم), then a final ن (ليكتبن -> ليكتب).
-const AL_PREFIXES = ['وال', 'بال', 'فال', 'كال', 'لل', 'ال'];
-const isNominal = a => !/^(PV|IV|CV)/.test(a.stem[1]);   // Buckwalter stem classes: PV/IV/CV are verbs
-const PRON_END = /ن(كما|كم|كن|ك|هما|هم|هن|ها|ه|ني|نا)$/;
-function retryForms(q) {
-  const w = q.replace(DIAC, '').replace(/ٱ/g, 'ا'), out = [];
-  const add = (word, why) => { if (word.length >= 2 && word !== w && !out.some(o => o.word === word)) out.push({ word, why }); };
-  const p = AL_PREFIXES.find(x => w.startsWith(x));
-  if (p) add(w.slice(p.length), 'al');
-  const m = w.match(PRON_END);
-  if (m) add(w.slice(0, m.index) + m[1], 'nun');
-  if (w.endsWith('ن')) add(w.slice(0, -1), 'nun');
-  return out;
-}
-
-function rootVariants(n) {
-  const out = [n];
-  if (n.length === 3 && n[1] === n[2]) out.push(n.slice(0, 2));
-  if (n.length === 2) out.push(n + n[1]);
-  const alt = { 'ا': 'وي', 'و': 'يا', 'ي': 'وا' };
-  [...n].forEach((c, i) => { for (const a of alt[c] || '') out.push(n.slice(0, i) + a + n.slice(i + 1)); });
-  return out;
-}
-function rootIdsFor(n) {
-  for (const v of rootVariants(n)) {
-    const ids = (hwNorm.get(v) || []).filter(e => e[3]).map(e => e[0]);
-    if (ids.length) return ids;
-  }
-  return [];
-}
-
-function multiWord(words) {
-  main.innerHTML = `<h2 class="sec">Words</h2>` + words.map(w => {
-    const a = analyze(w)[0];
-    const g = a ? a.stem[2].replace(/;/g, '; ') : (hwNorm.get(norm(w))?.[0] ? plain(stripHead(hwNorm.get(norm(w))[0])).slice(0, 90) : '—');
-    return `<div class="list-item" data-q="${esc(w)}"><span class="w" lang="ar">${esc(w)}</span><span class="g">${esc(g)}</span></div>`;
-  }).join('');
-}
-
-function fallback(q, n) {
-  // nearest keys within edit distance 1 (plus prefix completions)
-  const near = [];
-  const seen = new Set();
-  const consider = r => { if (!seen.has(r[0])) { seen.add(r[0]); near.push(r); } };
-  for (const r of IDX) {
-    if (Math.abs(r[0].length - n.length) <= 1 && ed1(r[0], n)) consider(r);
-    if (near.length > 30) break;
-  }
-  for (let i = lowerBound(n); i < IDX.length && IDX[i][0].startsWith(n) && near.length < 40; i++) consider(IDX[i]);
-  main.dataset.empty = W ? '' : '1';
-  main.innerHTML = `<p class="muted">No exact match for <span lang="ar">${esc(q)}</span>.</p>` +
-    (near.length ? `<h2 class="sec">Closest</h2>` + near.slice(0, 25).map(r => `<div class="list-item" data-pick='${esc(JSON.stringify(r))}'><span class="w" lang="ar">${esc(r[1])}</span><span class="g">${esc(glossFor(r))}</span></div>`).join('') : '');
-}
-function ed1(a, b) {
-  if (a === b) return true;
-  if (a.length === b.length) { let d = 0; for (let i = 0; i < a.length; i++) if (a[i] !== b[i] && ++d > 1) return false; return true; }
-  if (a.length < b.length) [a, b] = [b, a];
-  let i = 0, j = 0, d = 0;
-  while (i < a.length && j < b.length) { if (a[i] === b[j]) { i++; j++; } else { if (++d > 1) return false; i++; } }
-  return true;
-}
-
-function englishSearch(q) {
-  // English searches every Hans Wehr definition, so it needs all the chunks (the background prefetch may have them)
-  if (!hwHave(HW.chunks)) {
-    const tok = ++defsTok, here = MEM ? memCur : location.hash;
-    main.innerHTML = '<p class="muted">Loading Hans Wehr’s definitions…</p>';
-    loadAllHw().then(() => { if (tok === defsTok && view === 'result' && (MEM ? memCur : location.hash) === here) englishSearch(q); },
-      () => { main.innerHTML = '<p class="muted">Couldn’t load Hans Wehr. Check your connection and try again.</p>'; });
-    return;
-  }
-  const l = latin(q);
-  // transliteration exact matches first
-  const tr = HW.entries.filter(e => e[6] && latin(e[6]) === l);
-  if (!plainDefs) plainDefs = HW.entries.map(e => plain(stripHead(e)).toLowerCase());
-  const terms = q.toLowerCase().split(/\s+/).filter(Boolean).map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  const re = new RegExp(terms.map(t => `(?=[\\s\\S]*\\b${t})`).join(''), '');
-  const first = new RegExp('\\b' + terms[0]);
-  const scored = [];
-  HW.entries.forEach((e, i) => {
-    const d = plainDefs[i];
-    if (!re.test(d)) return;
-    const pos = d.search(first);
-    // prefer early matches and matches before the first ';'
-    const semi = d.indexOf(';');
-    scored.push([pos + (semi >= 0 && pos > semi ? 200 : 0) + (e[3] ? 0 : 5), e]);
-  });
-  scored.sort((a, b) => a[0] - b[0]);
-  const hl = s => { let h = esc(s); for (const t of terms) h = h.replace(new RegExp(`\\b(${t})`, 'gi'), '<mark>$1</mark>'); return h; };
-  const item = e => `<div class="list-item" data-e="${e[0]}"><span class="w" lang="ar">${esc(e[1])}</span><span class="g"><i class="muted">${esc(e[6] || '')}</i> ${hl(plain(stripHead(e)).slice(0, 220))}</span></div>`;
-  main.innerHTML =
-    (tr.length ? `<h2 class="sec">Transliteration</h2>` + tr.slice(0, 20).map(item).join('') : '') +
-    `<h2 class="sec">English · ${scored.length} matches</h2>` +
-    (scored.length ? scored.slice(0, 80).map(x => item(x[1])).join('') : '<p class="muted">Nothing found.</p>');
-}
-
-// ---------- result preferences: which dictionaries show, in what order, and the word analysis ----------
-const DICTS = [
-  { id: 'wikt', name: 'Wiktionary', desc: 'Modern words, inflected forms and broken plurals' },
-  { id: 'hw', name: 'Hans Wehr', desc: 'Roots, verb forms and derived words' },
-  { id: 'lexicon', name: 'Buckwalter lexicon', desc: 'Short glosses for words missing from Hans Wehr' },
-  { id: 'lane', name: 'Lane’s Lexicon', desc: 'Classical Arabic, in depth; loads on demand' },
-  { id: 'mufradat', name: 'al-Mufradāt', desc: 'al-Rāghib al-Iṣfahānī on Qur’anic words, in Arabic' },
-  { id: 'mukhtar', name: 'Mukhtār al-Ṣiḥāḥ', desc: 'al-Rāzī’s classical dictionary, in Arabic' },
+// ---------- Theme & Typography Preferences ----------
+const THEMES = ['paper', 'sepia', 'night'];
+const THEME_LABELS = { paper: 'Paper', sepia: 'Sepia', night: 'Night' };
+const AR_FONTS = [
+  { id: 'amiri', name: 'Amiri', desc: 'Classical book Naskh', sample: 'الكِتَابُ وَالقَلَمُ' },
+  { id: 'scheherazade', name: 'Scheherazade New', desc: 'Crisp scholarly marks', sample: 'الكِتَابُ وَالقَلَمُ' },
+  { id: 'noto', name: 'Noto Naskh Arabic', desc: 'Clean modern reading', sample: 'الكِتَابُ وَالقَلَمُ' },
 ];
-const DICT_IDS = DICTS.map(d => d.id);
+
+function getTheme() {
+  const saved = lsGet('qamus.ui.theme');
+  if (THEMES.includes(saved)) return saved;
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'paper';
+}
+function applyTheme(t) {
+  const next = THEMES.includes(t) ? t : 'paper';
+  document.documentElement.dataset.theme = next;
+  lsSet('qamus.ui.theme', next);
+  const lbl = $('#theme-label');
+  if (lbl) lbl.textContent = THEME_LABELS[next];
+}
+function getArFont() {
+  const f = lsGet('qamus.ui.arFont');
+  return AR_FONTS.some(x => x.id === f) ? f : 'amiri';
+}
+function applyArFont(f) {
+  const next = AR_FONTS.some(x => x.id === f) ? f : 'amiri';
+  document.documentElement.dataset.arFont = next;
+  lsSet('qamus.ui.arFont', next);
+}
+
+applyTheme(getTheme());
+applyArFont(getArFont());
+
+// ---------- App View State ----------
+let curView = 'boot';
+let activeSourceTab = 'all';
+let lastSearchedRaw = '';
+let resultSeq = 0;
+let suggestItems = [];
+let suggestIdx = -1;
+let openSheetApi = null;
+let toastTimer = 0;
+
+// Vocab / Folder UI state
+const vocabUi = {
+  selectFolders: false,
+  pickedFolders: new Set(),
+  folderId: null,
+  filter: '',
+  selectCards: false,
+  pickedCards: new Set(),
+  confirmDelCards: false,
+};
+
+// Study state
+let study = null;
+
+// ---------- Helpers ----------
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const qAttr = q => (isAr(q) ? 'lang="ar"' : 'dir="auto"');
+const cleanQ = s => String(s || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+const clip = (s, n = 2048) => String(s ?? '').slice(0, n);
+const cleanTags = t => [...new Set((Array.isArray(t) ? t : String(t ?? '').split(/[\s,;]+/))
+  .map(x => String(x).trim().slice(0, 64)).filter(Boolean))].slice(0, 50);
+
+function uid(prefix) {
+  const a = new Uint8Array(6);
+  crypto.getRandomValues(a);
+  return prefix + '_' + Date.now().toString(36) + [...a].map(b => (b % 36).toString(36)).join('');
+}
+
+function relTime(t) {
+  if (!t) return '';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  if (s < 86400 * 30) return Math.round(s / 86400) + 'd ago';
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+async function copyText(text, label = 'Copied') {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(label);
+  } catch {
+    toast('Clipboard unavailable');
+  }
+}
+
+function toast(html, action) {
+  document.getElementById('toast')?.remove();
+  clearTimeout(toastTimer);
+  const el = document.createElement('div');
+  el.id = 'toast';
+  el.className = 'toast';
+  el.setAttribute('role', 'status');
+  el.innerHTML = `<span>${html}</span>${action ? `<button type="button">${esc(action.label)}</button>` : ''}`;
+  if (action) {
+    el.querySelector('button').addEventListener('click', () => {
+      clearTimeout(toastTimer);
+      el.remove();
+      action.run();
+    });
+  }
+  document.body.appendChild(el);
+  toastTimer = setTimeout(() => el.remove(), 4800);
+}
+
+// ---------- Store Data Model (compatible with root QamusStore) ----------
+const vdoc = () => Store.doc;
+const liveFolders = () => vdoc().folders.filter(f => !f.deleted);
+const liveCards = () => vdoc().cards.filter(c => !c.deleted);
+const liveHistory = () => vdoc().history.filter(h => !h.deleted).sort((a, b) => b.t - a.t);
+const historyPaused = () => !!vdoc().settings.pauseHistory;
+
+const VIRTUAL_INBOX = { id: INBOX, name: 'Inbox', parent: null, virtual: true };
+function folderById(id) {
+  return vdoc().folders.find(f => f.id === id && !f.deleted) || (id === INBOX ? VIRTUAL_INBOX : null);
+}
+const parentOf = f => (f.parent && f.parent !== f.id && folderById(f.parent) ? f.parent : null);
+const cardFolder = c => (folderById(c.folder) ? c.folder : INBOX);
+const byFolderName = (a, b) => (a.id === INBOX ? -1 : b.id === INBOX ? 1 : a.name.localeCompare(b.name, ['ar', 'en']));
+
+function allFolders() {
+  const fs = liveFolders();
+  if (!fs.some(f => f.id === INBOX) && liveCards().some(c => cardFolder(c) === INBOX)) fs.push(VIRTUAL_INBOX);
+  return fs;
+}
+function childrenOf(id) { return allFolders().filter(f => parentOf(f) === (id || null)).sort(byFolderName); }
+function tree() {
+  const out = [], seen = new Set();
+  const walk = (id, depth) => {
+    for (const f of childrenOf(id)) {
+      if (seen.has(f.id)) continue;
+      seen.add(f.id);
+      out.push({ f, depth });
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+function descendants(id) {
+  const out = new Set(), stack = [id];
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const f of allFolders()) {
+      if (parentOf(f) === cur && !out.has(f.id) && f.id !== id) { out.add(f.id); stack.push(f.id); }
+    }
+  }
+  return out;
+}
+function folderPathList(id) {
+  const out = [], seen = new Set();
+  let f = folderById(id);
+  while (f && !seen.has(f.id)) {
+    seen.add(f.id);
+    out.unshift(f);
+    f = parentOf(f) ? folderById(f.parent) : null;
+  }
+  return out;
+}
+const folderPath = id => folderPathList(id).map(f => f.name).join(' / ');
+const cardsIn = id => liveCards().filter(c => cardFolder(c) === id);
+function cardsDeep(id) {
+  const ids = new Set([id, ...descendants(id)]);
+  return liveCards().filter(c => ids.has(cardFolder(c)));
+}
+
+const dayStart = (t, add = 0) => { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + add); return d.getTime(); };
+const endOfDay = (t, add = 0) => dayStart(t, add + 1) - 1;
+
+function isPaused(id) { return folderPathList(id).some(x => x.paused); }
+const cardPaused = c => isPaused(cardFolder(c));
+
+function cardStatus(card, now = Date.now()) {
+  if (cardPaused(card)) return { k: 'paused', label: 'Paused' };
+  const r = vdoc().reviews[card.id];
+  if (!r || !r.last) return { k: 'new', label: 'New' };
+  if (r.due <= endOfDay(now)) return { k: 'due', label: 'Due' };
+  const d = Math.max(1, Math.round((dayStart(r.due) - dayStart(now)) / 86400000));
+  return { k: 'later', label: `in ${d}d`, days: d };
+}
+const isDue = c => { const k = cardStatus(c).k; return k === 'new' || k === 'due'; };
+const dueCount = cards => cards.filter(isDue).length;
+
+function masteryStats(cards) {
+  let mastered = 0, due = 0, fresh = 0;
+  for (const c of cards) {
+    const st = cardStatus(c);
+    if (st.k === 'later') mastered++;
+    else if (st.k === 'due') due++;
+    else fresh++;
+  }
+  return { total: cards.length, mastered, due, fresh };
+}
+
+function savedIndex() {
+  const m = new Map();
+  for (const c of liveCards()) {
+    if (!c.source || c.source === 'custom' || !c.ref) continue;
+    const k = c.source + '|' + c.ref;
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(c);
+  }
+  return m;
+}
+function savedWordKeys() {
+  return new Set(liveCards().map(c => c.key).filter(Boolean));
+}
+
+function lastFolder() {
+  const id = lsGet('qamus.lastFolder');
+  return id && folderById(id) ? id : INBOX;
+}
+
+// Result & text size preferences stored in Store.doc.settings
+const textSize = v => (Number.isFinite(v) ? Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP)) : 100);
 function resultPrefs() {
-  const st = (Store && Store.doc && Store.doc.settings) || {};
+  const st = vdoc().settings || {};
   const order = String(st.dictOrder || '').split(',').filter((id, i, a) => DICT_IDS.includes(id) && a.indexOf(id) === i);
   for (const id of DICT_IDS) if (!order.includes(id)) order.push(id);
   const off = new Set(String(st.dictOff || '').split(',').filter(id => DICT_IDS.includes(id)));
   return { order, off, parse: st.showParse !== false, size: { en: textSize(st.textEn), ar: textSize(st.textAr) } };
 }
-// Text size of dictionary entries, in percent: one for the English dictionaries, one for the Arabic ones.
-const SIZE_MIN = 80, SIZE_MAX = 160, SIZE_STEP = 10;
-const textSize = v => (Number.isFinite(v) ? Math.min(SIZE_MAX, Math.max(SIZE_MIN, Math.round(v / SIZE_STEP) * SIZE_STEP)) : 100);
 function applyTextSizes() {
-  const { size } = resultPrefs(), s = document.documentElement.style;
-  s.setProperty('--t-en', size.en / 100);
-  s.setProperty('--t-ar', size.ar / 100);
+  const { size } = resultPrefs();
+  document.documentElement.style.setProperty('--t-en', size.en / 100);
+  document.documentElement.style.setProperty('--t-ar', size.ar / 100);
 }
 function setResultPrefs({ order, off, parse, size }) {
-  if (!Store) return;
   Store.mutate(d => {
     const next = { ...d.settings, updatedAt: Date.now() };
     if (order) next.dictOrder = order.join(',');
@@ -834,380 +315,130 @@ function setResultPrefs({ order, off, parse, size }) {
   });
 }
 
-function showEntry(id) {
-  const e = byId.get(id); if (!e) return home();
-  showRoots([e[4]], { hits: new Set([id]), force: 'hw' }, e[1]);   // an entry you opened always shows
+// Mutations
+function ensureInbox(d) {
+  if (d.folders.some(f => f.id === INBOX && !f.deleted)) return;
+  const now = Date.now();
+  const rec = { id: INBOX, name: 'Inbox', parent: null, createdAt: now, updatedAt: now, deleted: false };
+  const i = d.folders.findIndex(f => f.id === INBOX);
+  if (i >= 0) d.folders[i] = rec;
+  else d.folders.push(rec);
 }
+function newFolderRec(name, parent, now) {
+  return { id: uid('f'), name: clip(name, 100).trim(), parent: parent || null, createdAt: now, updatedAt: now, deleted: false };
+}
+function cardRec(fields, folder, now) {
+  const c = { id: uid('c'), folder };
+  for (const k of TEXT_FIELDS) c[k] = clip(fields[k]).trim();
+  c.key = clip(norm(c.word));
+  c.source = CARD_SOURCES.includes(fields.source) ? fields.source : 'custom';
+  c.ref = c.source === 'custom' ? '' : clip(fields.ref, 200);
+  c.tags = cleanTags(fields.tags);
+  c.createdAt = now;
+  c.updatedAt = now;
+  c.deleted = false;
+  return c;
+}
+const tombstone = (c, now) => ({ id: c.id, folder: c.folder, word: '', updatedAt: now, deleted: true });
 
-let defsTok = 0;
-function showRoots(rootIds, opt, q) {
-  const { hits = new Set(), forms = [], parses = [], bwOnly = [], wikt = [], laneOnly = [], laneWord = '', arWord = '', force = '', retry = null } = opt;
-  main.dataset.empty = '';
-  // Hans Wehr's definitions come in chunks: fetch the ones these roots need first (usually one small file).
-  const tok = ++defsTok, here = MEM ? memCur : location.hash;
-  if (HW && rootIds.length && (force === 'hw' || !resultPrefs().off.has('hw')) && !hwHave(rootIds)) {
-    main.innerHTML = '<p class="muted">Loading Hans Wehr…</p>';
-    const still = () => tok === defsTok && view === 'result' && (MEM ? memCur : location.hash) === here;
-    loadHw(rootIds).then(() => { if (still()) showRoots(rootIds, opt, q); },
-      () => { if (still()) main.innerHTML = '<p class="muted">Couldn’t load Hans Wehr. Check your connection and try again.</p>'; });
-    return;
-  }
-  lastLaneWord = laneWord;
-  lastArWord = norm(q || '');
-  const pr = resultPrefs();
-  const on = id => id === force || !pr.off.has(id);
-  const extra = uniqParses(bwOnly).slice(0, 6);
-  const arKeys = arKeysFor(rootIds, [...laneOnly, arWord]);
-  const has = { wikt: wikt.length, hw: rootIds.length, lexicon: extra.length, lane: laneOnly.length };
-  for (const id of AR_IDS) has[id] = arKeys[id].length;
-  let h = '', rootsShown = false, hidden = false;
-  pr.order.forEach((id, i) => {
-    if (!has[id]) { /* nothing from this dictionary */ }
-    else if (!on(id)) hidden = true;
-    else if (id === 'wikt') h += `<h2 class="sec">Wiktionary</h2>` + wikt.map(wCard).join('');
-    else if (id === 'hw') {
-      h += `<h2 class="sec">${rootIds.length > 1 ? 'Roots' : 'Root'}</h2>`;
-      rootIds.forEach((rid, k) => { h += rootCard(rid, hits, forms, k === 0 || rootIds.length <= 2, on('lane')); });
-      rootsShown = true;
-    }
-    else if (id === 'lexicon') h += `<h2 class="sec">${rootsShown ? 'Also in lexicon' : 'Lexicon'}</h2>` + extra.map(bwCard).join('');
-    else if (id === 'lane') h += `<h2 class="sec">Lane’s Lexicon</h2>` + laneOnly.map(lr => laneBlock(lr, true)).join('');
-    else if (AR_DICTS[id]) h += `<h2 class="sec">${AR_DICTS[id].name}</h2>` + arKeys[id].map((k, j) => arBlock(id, k, j === 0)).join('');
-    // the word analysis sits after the first dictionary in your order, as it did after Wiktionary by default
-    if (i === 0 && pr.parse && parses.length) h += `<h2 class="sec">Parsed</h2>` + uniqParses(parses).slice(0, 4).map(parseHtml).join('');
+function addCard(fields, folder, newFolderName) {
+  let id;
+  Store.mutate(d => {
+    const now = Date.now();
+    ensureInbox(d);
+    if (newFolderName) { const f = newFolderRec(newFolderName, null, now); d.folders.push(f); folder = f.id; }
+    const c = cardRec(fields, folder || INBOX, now);
+    d.cards.push(c);
+    id = c.id;
   });
-  if (retry) {
-    const why = retry.why === 'al' ? 'without the ال at the start' : 'without the emphatic نّ';
-    // A word found only after taking off ال (التناوش) is often a classical noun Hans Wehr doesn't list on its own.
-    // When Hans Wehr doesn't mark it, lead with the sentence the dictionaries themselves give for it.
-    const lead = retry.why === 'al' && !hits.size && !forms.length
-      ? pr.order.filter(id => on(id) && (AR_DICTS[id] ? arKeys[id].length : id === 'lane' && laneWord)) : [];
-    h = `<p class="retry-note">No match for <span lang="ar">${esc(retry.from)}</span>. Showing <span lang="ar">${esc(retry.word)}</span>, ${why}.</p>`
-      + (lead.length ? `<section class="lead" hidden aria-label="What the dictionaries say"></section>` : '') + h;
-    if (lead.length) requestAnimationFrame(() => fillLead(main.querySelector('.lead'), retry, lead, arKeys, laneWord));
-  }
-  if (hidden) h += `<p class="muted hidden-note">Some results are hidden by your <a href="#settings" data-go="settings">dictionary settings</a>.</p>`;
-  main.innerHTML = h || '<p class="muted">Nothing found.</p>';
-  if (hasVocab()) markSaved(main);
-  main.querySelectorAll('details.lane[open]').forEach(fillLane);
-  main.querySelectorAll('details.ard[open]').forEach(fillAr);
-  const first = main.querySelector('.word.hit, .forms tr.hit');
-  if (first && !main.querySelector('.lead')) requestAnimationFrame(() => first.scrollIntoView({ block: 'center' }));
-  else window.scrollTo(0, 0);
+  lsSet('qamus.lastFolder', folder || INBOX);
+  return id;
 }
-function uniqParses(ps) {
-  const seen = new Set(), out = [];
-  for (const a of ps) { const k = a.pre[0] + a.stem[0] + a.suf[0]; if (!seen.has(k)) { seen.add(k); out.push(a); } }
-  return out;
+function updateCard(id, patch, newFolderName) {
+  Store.mutate(d => {
+    const now = Date.now();
+    const c = d.cards.find(x => x.id === id && !x.deleted);
+    if (!c) return;
+    if (newFolderName) { const f = newFolderRec(newFolderName, null, now); d.folders.push(f); patch = { ...patch, folder: f.id }; }
+    for (const k of TEXT_FIELDS) if (k in patch) c[k] = clip(patch[k]).trim();
+    if ('tags' in patch) c.tags = cleanTags(patch.tags);
+    if (patch.folder) { if (patch.folder === INBOX) ensureInbox(d); c.folder = patch.folder; }
+    c.key = clip(norm(c.word));
+    c.updatedAt = now;
+  });
 }
-function parseHtml(a) {
-  const parts = [];
-  const pre = a.pre[0], suf = a.suf[0];
-  if (pre) parts.push(`<span>${esc(pre)}</span>`);
-  parts.push(`<span class="stem">${esc(a.stem[0])}</span>`);
-  if (suf) parts.push(`<span>${esc(suf)}</span>`);
-  const gl = [a.pre[2], a.stem[2].replace(/;/g, '; '), a.suf[2]].filter(Boolean).join(' + ');
-  const R = rootLabel(a.stem);
-  return `<div class="parse"><div class="segs" lang="ar">${parts.join('<span class="seg-sep">·</span>')}</div>
-    <div class="gl">${esc(gl)}${R ? ` · root <span lang="ar">${esc(R)}</span>` : ''}</div></div>`;
+function deleteCards(ids) {
+  const set = new Set(ids);
+  Store.mutate(d => {
+    const now = Date.now();
+    d.cards = d.cards.map(c => (set.has(c.id) && !c.deleted ? tombstone(c, now) : c));
+    for (const id of set) delete d.reviews[id];
+  });
 }
-function rootLabel(stem) {
-  if (stem[5].length) return [...byId.get(stem[5][0])[1]].join(' ');
-  if (stem[3] >= 0) return [...M.roots[stem[3]][0].replace(/\(\d\)|\/.*$|-/g, '')].join(' ');
-  return '';
+function moveCards(ids, folder) {
+  const set = new Set(ids);
+  Store.mutate(d => {
+    const now = Date.now();
+    if (folder === INBOX) ensureInbox(d);
+    for (const c of d.cards) if (set.has(c.id) && !c.deleted) { c.folder = folder; c.updatedAt = now; }
+  });
 }
-function bwCard(a) {
-  const R = rootLabel(a.stem);
-  const w = a.stem[4] || a.stem[0];
-  return `<div class="bw"><div class="e-hw"><span class="w" lang="ar">${esc(w)}</span></div>
-    <div class="e-body"><div class="def">${esc(a.stem[2].replace(/;/g, '; '))}</div>
-    <div class="e-meta muted">${R ? `root <span lang="ar">${esc(R)}</span> · ` : ''}not in Hans Wehr</div></div>${SB({ s: 'lexicon', r: w, w, g: a.stem[2].replace(/;/g, '; '), root: R }, w)}</div>`;
+function createFolder(name, parent) {
+  let id;
+  Store.mutate(d => {
+    const f = newFolderRec(name, parent, Date.now());
+    if (parent === INBOX) ensureInbox(d);
+    d.folders.push(f);
+    id = f.id;
+  });
+  return id;
 }
-
-let lastLaneWord = '';
-function wGloss(e) {
-  const m = e[2].match(/<li>(.*?)<\/li>/);
-  return plain(m ? m[1] : e[2]).slice(0, 90);
+function renameFolder(id, name) {
+  Store.mutate(d => {
+    if (id === INBOX) ensureInbox(d);
+    const f = d.folders.find(x => x.id === id && !x.deleted);
+    if (f) { f.name = clip(name, 100).trim(); f.updatedAt = Date.now(); }
+  });
 }
-function wRoots(k) {  // build-time link to Hans Wehr, else the morphological analyzer's root
-  const e = W.entries[k];
-  if (e[3].length) return e[3];
-  const a = analyze(e[0]).find(x => x.stem[5].length);
-  return a ? a.stem[5] : [];
+function setFolderPaused(id, on) {
+  Store.mutate(d => {
+    if (id === INBOX) ensureInbox(d);
+    const f = d.folders.find(x => x.id === id && !x.deleted);
+    if (!f) return;
+    if (on) f.paused = true; else delete f.paused;
+    f.updatedAt = Date.now();
+  });
 }
-function wCard(k) {
-  const e = W.entries[k], rs = wRoots(k);
-  const R = rs.length ? [...byId.get(rs[0])[1]].join(' ') : '';
-  return `<div class="bw"><div class="e-hw"><span class="w" lang="ar">${esc(e[0])}</span>${e[1] ? ` <i class="tr muted">${esc(e[1])}</i>` : ''}</div>
-    <div class="e-body"><div class="def wk">${defHtml(e[2], ['i', 'br', 'ol', 'li'])}</div>
-    ${R ? `<div class="e-meta muted">root <span lang="ar">${esc(R)}</span></div>` : ''}</div>${SB({ s: 'wikt', r: String(k) }, e[0])}</div>`;
-}
-function laneKey(n) {
-  if (!laneRoots) return n;
-  for (const v of rootVariants(n)) if (laneRoots.has(v)) return v;
-  return null;
-}
-function laneBlock(n, open) {
-  const k = laneKey(n);
-  if (!k) return '';
-  const auto = open || (lastLaneWord && (laneIdx.get(lastLaneWord) || []).includes(k));
-  return `<details class="lane" data-root="${esc(k)}" ${auto ? 'open' : ''}><summary>Lane’s Lexicon <span class="muted">· <span lang="ar">${esc([...k].join(' '))}</span></span></summary><div class="lane-body muted">Loading…</div></details>`;
-}
-async function fillLane(d) {
-  if (d.dataset.filled) return; d.dataset.filled = '1';
-  const k = d.dataset.root, body = d.querySelector('.lane-body');
-  try {
-    const name = k.codePointAt(0).toString(16).padStart(4, '0') + '.json';
-    if (!laneShards.has(name)) laneShards.set(name, fetch('data/lane/' + name).then(r => { if (!r.ok) throw new Error(name); return r.json(); }));
-    const shard = await laneShards.get(name);
-    const items = shard[k] || [];
-    body.classList.remove('muted');
-    body.innerHTML = items.length ? items.map(([w, def], i) => {
-      const hit = lastLaneWord && (norm(w) === lastLaneWord || norm((def.match(/^[\u0600-\u06FF\u064B-\u0652 ]+/) || [''])[0]) === lastLaneWord);
-      return `<div class="word lane-entry ${hit ? 'hit' : ''}">${SB({ s: 'lane', r: k + ':' + i }, w)}<span class="def">${defHtml(def, ['i', 'br', 'table', 'tbody', 'tr', 'td', 'center'])}</span></div>`;
-    }).join('') : '<p class="muted">No entries.</p>';
-    if (hasVocab()) markSaved(body);
-    // The word may only come up inside another entry's text (تناوش under نَاشَهُ): mark that mention and go to it.
-    if (lastLaneWord && !body.querySelector('.hit')) markLaneMention(body, lastLaneWord);
-    const hit = body.querySelector('mark.lane-hit') || body.querySelector('.hit');
-    // with a lead at the top, the page stays there until you ask for Lane's full entry from it
-    if (hit && (!main.querySelector('.lead') || d.dataset.fromLead)) hit.scrollIntoView({ block: 'center' });
-  } catch (err) { body.textContent = 'Couldn’t load Lane’s entry. Check your connection and try again.'; delete d.dataset.filled; }
-}
-// The first tappable Arabic word in a Lane entry that stands for w gets a <mark>, and its entry is marked as the hit.
-function markLaneMention(body, w) {
-  for (const span of body.querySelectorAll('.lane-entry .def .lk')) {
-    const words = span.textContent.split(/(\s+)/);
-    const i = words.findIndex(t => t.trim() && tokenIs(t, w));
-    if (i < 0) continue;
-    span.textContent = '';
-    words.forEach((t, j) => {
-      if (j !== i) return span.append(t);
-      const m = document.createElement('mark'); m.className = 'lane-hit'; m.textContent = t; span.append(m);
+function deleteFolder(id, mode) {
+  if (id === INBOX) return;
+  const ids = new Set([id, ...descendants(id)]);
+  ids.delete(INBOX);
+  Store.mutate(d => {
+    const now = Date.now();
+    if (mode === 'inbox') ensureInbox(d);
+    d.folders = d.folders.map(f => (ids.has(f.id) && !f.deleted
+      ? { id: f.id, name: '', parent: null, createdAt: f.createdAt || 0, updatedAt: now, deleted: true } : f));
+    d.cards = d.cards.map(c => {
+      if (c.deleted || !ids.has(c.folder)) return c;
+      if (mode === 'inbox') return { ...c, folder: INBOX, updatedAt: now };
+      delete d.reviews[c.id];
+      return tombstone(c, now);
     });
-    span.closest('.lane-entry').classList.add('hit');
-    return true;
-  }
-  return false;
-}
-// ---------- Arabic–Arabic dictionaries (OpenITI texts, one file per first letter, loaded on demand) ----------
-const AR_DICTS = {
-  mufradat: { name: 'al-Mufradāt', full: 'al-Mufradāt fī gharīb al-Qur’ān', dir: 'data/mufradat/' },
-  mukhtar: { name: 'Mukhtār al-Ṣiḥāḥ', full: 'Mukhtār al-Ṣiḥāḥ', dir: 'data/mukhtar/' },
-};
-const AR_IDS = Object.keys(AR_DICTS);
-const arRoots = {}, arShards = new Map();
-let lastArWord = '';
-function arKey(id, n) {
-  const rs = arRoots[id]; if (!rs || !n) return null;
-  for (const v of rootVariants(n)) if (rs.has(v)) return v;
-  return null;
-}
-function arKeysFor(rootIds, more) {   // the roots each Arabic dictionary has for this search, in result order
-  const out = {};
-  for (const id of AR_IDS) {
-    const ks = [];
-    for (const n of [...rootIds.map(r => norm(byId.get(r)?.[1] || '')), ...more.map(m => norm(m).replace(/\s+/g, ''))]) {
-      const k = arKey(id, n); if (k && !ks.includes(k)) ks.push(k);
-    }
-    out[id] = ks;
-  }
-  return out;
-}
-const arHas = n => AR_IDS.some(id => arKey(id, n));
-function arShard(id, k) {
-  const name = AR_DICTS[id].dir + k.codePointAt(0).toString(16).padStart(4, '0') + '.json';
-  if (!arShards.has(name)) arShards.set(name, fetch(name).then(r => { if (!r.ok) throw new Error(name); return r.json(); })
-    .catch(err => { arShards.delete(name); throw err; }));
-  return arShards.get(name);
-}
-async function arEntry(id, ref) {   // "root:i" -> { head, html }
-  const at = ref.lastIndexOf(':'), k = ref.slice(0, at);
-  const html = (await arShard(id, k))[k][+ref.slice(at + 1)];
-  return { head: arHead(id, html, k), html };
-}
-// The word to save: al-Mufradāt's headword, or the first word Mukhtār explains (its heading is spaced root letters).
-function arHead(id, html, k) {
-  const bs = [...html.matchAll(/<b>(.*?)<\/b>/g)].map(m => m[1]);
-  return (id === 'mukhtar' ? bs[1] : bs[0]) || bs[0] || k;
-}
-function arBlock(id, k, open) {
-  return `<details class="ard" data-dict="${id}" data-root="${esc(k)}" ${open ? 'open' : ''}><summary>${AR_DICTS[id].name} <span class="muted">· <span lang="ar">${esc([...k].join(' '))}</span></span></summary><div class="ard-body muted">Loading…</div></details>`;
-}
-// The texts come escaped from the build, with only <b>, <q>, <i> (verse references) and <br>. Each Arabic word
-// outside a reference becomes tappable, and a headword matching the search (with or without ال) is marked.
-function arHtml(html) {
-  const want = lastArWord;
-  return html.replace(/<b>([^<]*)<\/b>/g, (m, w, at) => {
-    const n = norm(w).replace(/\s+/g, '');
-    return at > 0 && want && (n === want || n === 'ال' + want || 'ال' + n === want) ? `<b class="hit">${w}</b>` : m;
-  }).replace(/<i>[^<]*<\/i>|(^|>)([^<]+)/g, (m, a, t) => t === undefined ? m
-    : a + t.replace(/[\u0621-\u063A\u0641-\u064A\u064B-\u0652\u0670]+/g, w => `<span class="lk" data-q="${w.replace(/[\u064B-\u0652\u0670]/g, '')}">${w}</span>`));
-}
-async function fillAr(d) {
-  if (d.dataset.filled) return; d.dataset.filled = '1';
-  const id = d.dataset.dict, k = d.dataset.root, body = d.querySelector('.ard-body');
-  try {
-    const items = (await arShard(id, k))[k] || [];
-    body.classList.remove('muted');
-    body.innerHTML = items.length ? items.map((html, i) => {
-      const head = arHead(id, html, k);
-      return `<div class="ard-entry">${SB({ s: id, r: k + ':' + i }, head)}<div class="ard-text" lang="ar" dir="rtl">${arHtml(html)}</div></div>`;
-    }).join('') + `<p class="ard-src muted">${AR_DICTS[id].full}, text and vowel marks from <a href="https://shamela.ws" target="_blank" rel="noopener">al-Maktaba al-Shāmila</a>.</p>`
-      : '<p class="muted">No entries.</p>';
-    if (hasVocab()) markSaved(body);
-  } catch (err) { body.textContent = 'Couldn’t load this entry. Check your connection and try again.'; delete d.dataset.filled; }
-}
-// ---------- the lead: a word's own sentence from the dictionaries ----------
-// Does a word in running text stand for w? Allows ال and a joined و/ف/ب/ك/ل in front (التناوش, وتناوش).
-const tokenIs = (tok, w) => {
-  const t = norm(tok).replace(/[^ء-ي]/g, '');
-  return t === w || ['ال', 'وال', 'فال', 'بال', 'كال', 'لل', 'و', 'ف'].some(p => t === p + w);
-};
-// The stretch of text around the first mention of w (preferring the exact form typed), cut at word edges.
-function snippet(text, w, exact, before, after, stop = /[.؟!\n]/) {
-  const re = /[ء-ْٰ]+/g;
-  let m, at = -1, len = 0;
-  while ((m = re.exec(text))) {
-    const t = norm(m[0]).replace(/[^ء-ي]/g, '');
-    if (exact && t === exact) { at = m.index; len = m[0].length; break; }
-    if (at < 0 && tokenIs(m[0], w)) { at = m.index; len = m[0].length; }
-  }
-  if (at < 0) return null;
-  let s = Math.max(0, at - before), e = Math.min(text.length, at + len + after);
-  // stop at a full stop or line break before or after the word, so the snippet starts and ends where a sentence does
-  for (let i = at - 1; i >= s; i--) if (stop.test(text[i])) { s = i + 1; break; }
-  for (let i = at + len; i < e; i++) if (stop.test(text[i])) { e = i + 1; break; }
-  if (s > 0 && s !== at) { const sp = text.indexOf(' ', s); if (sp >= 0 && sp < at) s = sp + 1; }
-  if (e < text.length) { const sp = text.lastIndexOf(' ', e); if (sp > at + len) e = sp; }
-  return { pre: (s > 0 && !stop.test(text[s - 1]) ? '…' : '') + text.slice(s, at), hit: text.slice(at, at + len),
-    post: text.slice(at + len, e).trimEnd() + (e < text.length && !stop.test(text[e - 1]) ? '…' : '') };
-}
-const htmlText = html => { const d = document.createElement('div'); d.innerHTML = html.replace(/<br\s*\/?>/g, '\n'); return d.textContent.replace(/[ \t]+/g, ' ').trim(); };
-
-async function fillLead(el, retry, ids, arKeys, laneWord) {
-  if (!el) return;
-  const w = norm(retry.word), exact = norm(retry.from);
-  const found = [];
-  for (const id of [...ids.filter(id => AR_DICTS[id]), ...ids.filter(id => !AR_DICTS[id])]) {   // Arabic dictionaries first
-    try {
-      if (AR_DICTS[id]) {
-        for (const k of arKeys[id]) {
-          const items = (await arShard(id, k))[k] || [];
-          const sn = items.map(htmlText).map(t => snippet(t, w, exact, 70, 150)).find(Boolean);
-          if (sn) { found.push({ id, sn, ar: true }); break; }
-        }
-      } else if (id === 'lane' && !found.length) {   // Lane only when no Arabic dictionary has the word
-        for (const k of laneIdx.get(laneWord) || []) {
-          const key = laneKey(k); if (!key) continue;
-          const name = key.codePointAt(0).toString(16).padStart(4, '0') + '.json';
-          if (!laneShards.has(name)) laneShards.set(name, fetch('data/lane/' + name).then(r => { if (!r.ok) throw new Error(name); return r.json(); }));
-          const items = (await laneShards.get(name))[key] || [];
-          const sn = items.map(([, def]) => htmlText(def)).map(t => snippet(t, w, '', 260, 40, /\n/)).find(Boolean);
-          if (sn) { found.push({ id, sn, ar: false }); break; }
-        }
-      }
-    } catch { /* a shard that won't load just leaves that dictionary out of the lead */ }
-    if (found.length >= 2) break;
-  }
-  if (!el.isConnected || !found.length) return;
-  el.innerHTML = found.map(({ id, sn, ar }) => `<div class="lead-item">
-    <p class="lead-text${ar ? '' : ' lead-en'}" ${ar ? 'lang="ar" dir="rtl"' : ''}>${esc(sn.pre)}<mark lang="ar">${esc(sn.hit)}</mark>${esc(sn.post)}</p>
-    <button type="button" class="lead-src" data-src="${id}">${id === 'lane' ? 'Lane’s Lexicon' : AR_DICTS[id].name} · full entry</button></div>`).join('');
-  el.hidden = false;
-  el.addEventListener('click', e => {
-    const b = e.target.closest('.lead-src'); if (!b) return;
-    const d = main.querySelector(b.dataset.src === 'lane' ? 'details.lane' : `details.ard[data-dict="${b.dataset.src}"]`);
-    if (!d) return;
-    const filled = d.dataset.filled;
-    d.dataset.fromLead = '1';
-    d.open = true;   // the toggle listener fills it, and Lane then scrolls to the word itself
-    if (b.dataset.src !== 'lane') d.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    else if (filled) (d.querySelector('mark.lane-hit, .hit') || d).scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
 }
 
-function stripHead(e) { const d = e[2] || ''; return d.startsWith(e[1]) ? d.slice(e[1].length).trim() : d; }
-function plain(s) { return s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(); }
-function defHtml(s, tags = ['b', 'i']) {
-  let h = esc(s);
-  for (const t of tags) h = h.replace(new RegExp(`&lt;(/?)${t}&gt;`, 'g'), `<$1${t}>`);
-  // make Arabic runs tappable
-  h = h.replace(/[؀-ۿ][؀-ۿً-ْ ]*[؀-ۿ]|[؀-ۿ]/g,
-    m => `<span class="ar lk" data-q="${m.trim()}">${m}</span>`);
-  return h;
-}
-function bwRoot(rid) { // HW root -> Buckwalter-ish latin for ejtaal
-  const e = byId.get(rid); if (!e) return '';
-  const T = { 'ا': 'A', 'أ': 'A', 'ب': 'b', 'ت': 't', 'ث': 'v', 'ج': 'j', 'ح': 'H', 'خ': 'x', 'د': 'd', 'ذ': '*', 'ر': 'r', 'ز': 'z', 'س': 's', 'ش': '$', 'ص': 'S', 'ض': 'D', 'ط': 'T', 'ظ': 'Z', 'ع': 'E', 'غ': 'g', 'ف': 'f', 'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h', 'و': 'w', 'ي': 'y', 'ى': 'y', 'ء': 'A' };
-  return [...norm(e[1])].map(c => T[c] || '').join('');
-}
-// Save (bookmark) buttons come from vocab.js; without it (single-file preview) rows render as before.
-const hasVocab = () => !!Store && typeof vocabView === 'function';
-const SB = (payload, word) => (hasVocab() ? saveBtn(payload, word) : '');
-let formIdxMap = null;
-const formIdx = f => { if (!formIdxMap) formIdxMap = new Map(HW.forms.map((x, i) => [x, i])); return formIdxMap.get(f); };
-function rootCard(rid, hits, hitForms, open, lane = true) {
-  const root = byId.get(rid); if (!root) return '';
-  const fs = formsBy.get(rid) || [];
-  const s = stripHead(root);
-  const cut = s.search(/<b>\s*(I{1,3}|IV|VI{0,3}|IX|X)\s*<\/b>/);
-  const formI = cut >= 0 ? s.slice(0, cut).trim() : s;
-  const ks = kids.get(rid) || [];
-  const anyHit = ks.some(k => hits.has(k[0])) || hits.has(rid) || fs.some(f => hitForms.includes(f));
-  const gist = plain(formI).replace(/^\S+\s/, '').slice(0, 120);
-  let h = `<details class="root" ${open || anyHit ? 'open' : ''}><summary>
-    <span class="root-letters" lang="ar">${esc([...root[1]].join(' '))}</span>
-    <span class="meta">${root[5] ? `<span class="tag">Qur’an ${root[5]}×</span>` : ''}<span class="tag">${ks.length + 1} words</span></span>
-    <span class="gist">${esc(gist)}</span></summary><div class="body">`;
-  if (root[3] && formI) {
-    h += `<div class="word ${hits.has(rid) ? 'hit' : ''}" id="w${rid}">${SB({ s: 'hw', r: String(rid) }, root[1])}<span class="hw" lang="ar">${esc(root[1])}</span> <span class="def">${defHtml(formI)}</span></div>`;
-  }
-  if (fs.length) {
-    h += `<table class="forms">` + fs.map(f => `<tr class="${hitForms.includes(f) ? 'hit' : ''}"><td class="num">${f[1]}</td><td class="verb" lang="ar">${esc(f[2])}</td><td class="def">${defHtml(f[3])}</td><td class="sv">${SB({ s: 'hw', r: 'f' + formIdx(f) }, f[2])}</td></tr>`).join('') + `</table>`;
-  }
-  h += ks.map(k => `<div class="word ${hits.has(k[0]) ? 'hit' : ''}" id="w${k[0]}">${SB({ s: 'hw', r: String(k[0]) }, k[1])}<span class="hw" lang="ar">${esc(k[1])}</span><span class="def">${defHtml(stripHead(k))}</span></div>`).join('');
-  if (lane) h += laneBlock(norm(root[1]), false);
-  const lat = bwRoot(rid);
-  h += `<div class="links"><a href="https://ejtaal.net/aa/#q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Lane &amp; others (ejtaal)</a>
-    <a href="https://corpus.quran.com/qurandictionary.jsp?q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Qur’an corpus</a></div>`;
-  return h + `</div></details>`;
-}
-
-// ---------- search history (synced: Store.doc.history) ----------
-const HIST_HOME = 12, HIST_MAX = 500;
-let view = '';              // 'home' | 'history' | 'result' | 'loading' — what #main shows
-let histConfirm = false;    // "Clear history" inline confirm is open
-const cleanQ = s => String(s).trim().replace(/\s+/g, ' ').slice(0, 200);
-function legacyHist() {     // the pre-sync localStorage list (newest first)
-  try { const h = JSON.parse(localStorage.getItem('hist') || '[]'); return Array.isArray(h) ? h.filter(x => typeof x === 'string') : []; }
-  catch { return []; }
-}
-function liveHistory() {
-  if (!Store) return legacyHist().map(q => ({ q, t: 0 }));
-  return Store.doc.history.filter(h => !h.deleted).sort((a, b) => b.t - a.t);
-}
-const historyPaused = () => !!Store?.doc.settings.pauseHistory;
+// History mutations
 const maxT = (hist, q) => hist.reduce((m, h) => (h.q === q && h.t > m ? h.t : m), 0);
-
 function recordSearch(raw) {
   const q = cleanQ(raw);
-  if (!q) return;
-  if (typeof tourOn !== 'undefined' && tourOn) return;   // the intro's sample search isn't yours
-  if (!Store) {   // no store (single-file preview): keep the old local list working
-    try { const h = legacyHist().filter(x => x !== q); h.unshift(q); localStorage.setItem('hist', JSON.stringify(h.slice(0, 30))); } catch {}
-    return;
-  }
-  Store.init().then(() => {
-    if (historyPaused()) return;
-    if (liveHistory()[0]?.q === q) return;   // consecutive repeat (and route() re-renders)
-    Store.mutate(d => {
-      const t = Math.max(Date.now(), (d.settings.historyClearedAt || 0) + 1, maxT(d.history, q) + 1);
-      d.history = [{ q, t }, ...d.history.filter(h => h.q !== q)];
-      let live = 0;
-      d.history = d.history.filter(h => h.deleted || ++live <= HIST_MAX);
-    }, { quiet: true });   // synced in batches: searches are most of an account's writes
-  });
+  if (!q || historyPaused()) return;
+  if (liveHistory()[0]?.q === q) return;
+  Store.mutate(d => {
+    const t = Math.max(Date.now(), (d.settings.historyClearedAt || 0) + 1, maxT(d.history, q) + 1);
+    d.history = [{ q, t }, ...d.history.filter(h => h.q !== q)];
+    let live = 0;
+    d.history = d.history.filter(h => h.deleted || ++live <= 500);
+  }, { quiet: true });
 }
 function deleteSearch(q) {
   Store.mutate(d => {
@@ -1222,151 +453,1662 @@ function clearHistory() {
     d.settings = { ...d.settings, historyClearedAt: now, updatedAt: now };
   });
 }
-function setPauseHistory(on) {
-  Store.mutate(d => { d.settings = { ...d.settings, pauseHistory: !!on, updatedAt: Date.now() }; });
-}
-// One-time move of the old localStorage list into the synced document.
-function migrateHist() {
-  let raw = null;
-  try { raw = localStorage.getItem('hist'); } catch { return; }
-  if (raw === null) return;
-  const have = new Set(Store.doc.history.map(h => h.q));
-  const add = [...new Set(legacyHist().map(cleanQ))].filter(q => q && !have.has(q));
-  if (add.length) {
-    const now = Date.now();
-    Store.mutate(d => { d.history = [...d.history, ...add.map((q, i) => ({ q, t: now - (i + 1) * 1000 }))]; });
+
+// ---------- SM-2 Scheduler ----------
+function schedule(prev, grade, now = Date.now()) {
+  const r = { due: 0, interval: 0, ease: 2.5, reps: 0, lapses: 0, last: 0, ...(prev || {}) };
+  const out = { ...r, last: now, updatedAt: now };
+  const ease2 = x => Math.round(x * 100) / 100;
+  if (grade === 0) {
+    return { ...out, reps: 0, lapses: r.lapses + 1, ease: ease2(Math.max(1.3, r.ease - 0.2)), interval: 0, due: now + AGAIN_MS };
   }
-  if (Store.persistent) { try { localStorage.removeItem('hist'); } catch {} }
+  const raw = g => {
+    if (r.reps === 0) return [1, 1, 4][g - 1];
+    if (r.reps === 1) return [3, 6, 8][g - 1];
+    return Math.round(Math.max(1, r.interval) * [1.2, r.ease, r.ease * 1.3][g - 1]);
+  };
+  const hard = Math.max(1, raw(1)), good = Math.max(hard, raw(2)), easy = Math.max(good + 1, raw(3));
+  const interval = [hard, good, easy][grade - 1];
+  const ease = grade === 1 ? Math.max(1.3, r.ease - 0.15) : grade === 3 ? r.ease + 0.15 : r.ease;
+  return { ...out, reps: r.reps + 1, interval, ease: ease2(ease), due: dayStart(now, interval) };
+}
+function intervalLabel(prev, grade, now = Date.now()) {
+  if (grade === 0) return '<10m';
+  const d = schedule(prev, grade, now).interval;
+  return d >= 365 ? `${Math.round(d / 36.5) / 10}y` : d >= 30 ? `${Math.round(d / 3) / 10}mo` : `${d}d`;
 }
 
-// Re-renders (data loading, sync) must not steal focus or scroll position.
-function focusKey() {
-  const a = document.activeElement;
-  if (!a || !main.contains(a)) return null;
-  if (a.id) return '#' + CSS.escape(a.id);
-  const row = a.closest('[data-hq], [data-card]');
-  if (!row) return null;
-  const rk = row.dataset.hq != null ? `[data-hq="${CSS.escape(row.dataset.hq)}"]` : `[data-card="${CSS.escape(row.dataset.card)}"]`;
-  const cls = [...a.classList].find(c => ['hist-del', 'hist-q', 'cw', 'cg'].includes(c));
-  return cls ? `${rk} .${cls}` : (a.matches('input') ? `${rk} input` : null);
+// ---------- Routing ----------
+function go(params) {
+  const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
+  if (location.hash === '#' + h || (!h && !location.hash)) route();
+  else location.hash = h ? '#' + h : '';
 }
-function renderKeepingFocus(next, html) {
-  const entering = view !== next;
-  const key = entering ? null : focusKey();
-  view = next;
-  main.innerHTML = html;
-  if (entering) window.scrollTo(0, 0);
-  else if (key) main.querySelector(key)?.focus({ preventScroll: true });
+const studyHash = (ids, mode) => `study=${ids.map(encodeURIComponent).join(',')}&mode=${mode}`;
+
+function updateNavChrome(tabName) {
+  document.querySelectorAll('[data-nav-tab]').forEach(el => {
+    if (el.dataset.navTab === tabName) el.setAttribute('aria-current', 'page');
+    else el.removeAttribute('aria-current');
+  });
+  const due = dueCount(liveCards());
+  const txt = due > 99 ? '99+' : String(due);
+  for (const id of ['rail-due-badge', 'bnav-due-badge']) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    b.hidden = !due;
+    b.textContent = txt;
+  }
 }
-function historyView() {
-  main.dataset.empty = '';
-  const items = liveHistory(), paused = historyPaused(), n = items.length;
-  if (!n) histConfirm = false;
-  renderKeepingFocus('history', `<h2 class="sec">History${n ? ` · ${n} search${n === 1 ? '' : 'es'}` : ''}</h2>
-    <div class="hist-controls">
-      <label class="switch"><input type="checkbox" id="hist-pause" ${paused ? 'checked' : ''}><span class="track" aria-hidden="true"></span>Pause recording</label>
-      ${n ? `<button type="button" class="btn" id="hist-clear" ${histConfirm ? 'hidden' : ''}>Clear history</button>` : ''}
+
+function renderRail() {
+  if (!railScroll) return;
+  const p = new URLSearchParams(location.hash.slice(1));
+  const curQ = p.get('q') || '', curF = p.get('folder') || '';
+  const folders = tree();
+  const recent = liveHistory().slice(0, 8);
+  const due = dueCount(liveCards());
+
+  let h = `<section class="rail-sec">
+    <div class="rail-sec-h"><span>Folders</span>${due ? `<button type="button" class="rail-sec-link" data-go="${esc(studyHash([...new Set(liveCards().filter(isDue).map(cardFolder))], 'review'))}">${due} due</button>` : ''}</div>`;
+  if (folders.length) {
+    h += `<ul class="rail-list">${folders.map(({ f, depth }) => {
+      const cs = cardsDeep(f.id), d = dueCount(cs);
+      const cls = f.id === curF ? ' on' : '';
+      return `<li><button type="button" class="rail-item${cls}" style="--depth:${depth}" data-go="folder=${esc(f.id)}">
+        <span class="rail-item-w" dir="auto">${esc(f.name)}</span>
+        <span class="rail-item-meta${d ? ' due' : ''}">${isPaused(f.id) ? 'paused' : d ? d + ' due' : cs.length}</span>
+      </button></li>`;
+    }).join('')}</ul>`;
+  } else {
+    h += `<p class="rail-empty">Bookmark any word to build your personal folders.</p>`;
+  }
+  h += `</section>`;
+
+  h += `<section class="rail-sec">
+    <div class="rail-sec-h"><span>Recent</span>${recent.length ? '<button type="button" class="rail-sec-link" data-go="history">All</button>' : ''}</div>`;
+  if (recent.length) {
+    h += `<ul class="rail-list">${recent.map(({ q, t }) => {
+      const cls = q === curQ ? ' on' : '';
+      return `<li><button type="button" class="rail-item${cls}" data-q="${esc(q)}">
+        <span class="rail-item-w" ${qAttr(q)}>${esc(q)}</span>
+        <span class="rail-item-meta">${relTime(t).replace(' ago', '')}</span>
+      </button></li>`;
+    }).join('')}</ul>`;
+  } else {
+    h += `<p class="rail-empty">Lookups appear here.</p>`;
+  }
+  h += `</section>`;
+
+  railScroll.innerHTML = h;
+}
+
+function route() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const q = p.get('q') || '';
+  if (q && qEl.value !== q && document.activeElement !== qEl) qEl.value = q;
+  if (!q && !p.has('e') && !p.has('f') && !p.has('w') && document.activeElement !== qEl) qEl.value = '';
+  clearBtn.hidden = !qEl.value;
+
+  document.body.classList.remove('studying', 'wide-view');
+  window.scrollTo(0, 0);
+
+  if (p.has('account')) {
+    if (curView === 'boot') { curView = 'home'; renderHomeView(); }
+    updateNavChrome('search');
+    renderRail();
+    if (SYNC_URL && Sync) accountSheet({ onClose: () => { if (location.hash === '#account') history.back(); } });
+    return;
+  }
+  if (p.has('settings')) {
+    curView = 'settings';
+    document.title = 'Settings · Qamus';
+    updateNavChrome('settings');
+    renderRail();
+    return renderSettingsView();
+  }
+  if (p.has('history')) {
+    curView = 'history';
+    document.title = 'History · Qamus';
+    updateNavChrome('history');
+    renderRail();
+    return renderHistoryView();
+  }
+  if (p.has('vocab')) {
+    curView = 'vocab';
+    document.title = 'Vocab · Qamus';
+    updateNavChrome('vocab');
+    renderRail();
+    return renderVocabView();
+  }
+  if (p.get('folder')) {
+    curView = 'folder';
+    vocabUi.folderId = p.get('folder');
+    document.title = `${folderById(vocabUi.folderId)?.name || 'Folder'} · Qamus`;
+    updateNavChrome('vocab');
+    renderRail();
+    return renderFolderView(vocabUi.folderId);
+  }
+  if (p.get('study')) {
+    curView = 'study';
+    document.body.classList.add('studying');
+    document.title = 'Study · Qamus';
+    updateNavChrome('vocab');
+    renderRail();
+    return renderStudyRoute(p.get('study').split(','), p.get('mode'));
+  }
+
+  updateNavChrome('search');
+  renderRail();
+
+  if (p.get('e') || p.get('f') || p.get('w') || q.trim()) {
+    curView = 'result';
+    activeSourceTab = 'all';
+    if (!state.HW) {
+      main.innerHTML = `<div class="boot-state"><div class="boot-seal" lang="ar">قاموس</div><p class="muted">Loading dictionary index…</p></div>`;
+      return;
+    }
+    if (p.get('e')) {
+      const e = state.byId.get(+p.get('e'));
+      if (!e) return renderHomeView();
+      lastSearchedRaw = e[1];
+      document.title = `${e[1]} · Qamus`;
+      return renderRootsResult([e[4]], { hits: new Set([e[0]]), force: 'hw' }, e[1]);
+    }
+    if (p.get('f')) {
+      const f = state.HW.forms[+p.get('f')];
+      if (!f) return renderHomeView();
+      lastSearchedRaw = f[2];
+      document.title = `${f[2]} · Qamus`;
+      return renderRootsResult([f[0]], { forms: [f], force: 'hw' }, q || f[2]);
+    }
+    if (p.get('w')) {
+      if (!state.W) {
+        main.innerHTML = `<div class="boot-state"><p class="muted">Loading Wiktionary…</p></div>`;
+        return;
+      }
+      const k = +p.get('w');
+      lastSearchedRaw = q || state.W.entries[k]?.[0] || '';
+      document.title = `${lastSearchedRaw} · Qamus`;
+      return renderRootsResult(wRoots(k), { wikt: [k], force: 'wikt' }, lastSearchedRaw);
+    }
+    lastSearchedRaw = q.trim();
+    document.title = `${lastSearchedRaw} · Qamus`;
+    recordSearch(lastSearchedRaw);
+    renderRail();
+    return runSearch(lastSearchedRaw);
+  }
+
+  curView = 'home';
+  document.title = 'Qamus · قاموس';
+  renderHomeView();
+}
+
+// ==========================================================================
+// 1. HOME VIEW
+// ==========================================================================
+const NEW_HOME = 'https://alqamus.pages.dev';
+const OLD_HOME = location.hostname === 'subhanepix.github.io' || !!window.QAMUS_FORCE_MOVED;
+function movedBannerHtml() {
+  if (!OLD_HOME) return '';
+  const user = (SYNC_URL && Sync?.state.user) || '';
+  const how = user
+    ? `Sign in there with <code>${esc(user)}</code> and your words come with you.`
+    : 'Turn on sync first, then sign in there with the same username to bring your words across.';
+  return `<section class="moved-banner" role="status">
+    <p><strong>Qamus has a new home:</strong> <a href="${NEW_HOME}/">${NEW_HOME.replace('https://', '')}</a></p>
+    <p>${how}</p>
+    <a class="btn primary sm" href="${NEW_HOME}/">Open alqamus.pages.dev</a>
+  </section>`;
+}
+
+function renderHomeView() {
+  const user = (SYNC_URL && Sync?.state.user) || '';
+  const hr = new Date().getHours();
+  const tod = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
+  const recent = liveHistory().slice(0, 12);
+  const cards = liveCards();
+  const dueCards = cards.filter(isDue);
+  const dueIds = [...new Set(dueCards.map(cardFolder))];
+
+  const studyBanner = cards.length ? `
+    <section class="study-banner ${dueCards.length ? '' : 'calm'}">
+      <div>
+        <div class="sb-num">${dueCards.length ? `<b>${dueCards.length}</b> ${dueCards.length === 1 ? 'card' : 'cards'} due today` : 'All caught up'}</div>
+        <p class="sb-meta">${plural(cards.length, 'saved word')} across ${plural(allFolders().length, 'folder')}${dueCards.length ? ' · SM-2 spaced repetition ready' : ''}</p>
+      </div>
+      <div class="toolbar-row">
+        ${dueCards.length ? `<button type="button" class="btn primary" data-go="${esc(studyHash(dueIds, 'review'))}">Review now</button>` : ''}
+        <button type="button" class="btn soft" data-go="vocab">Open Vocab</button>
+      </div>
+    </section>` : '';
+
+  const samples = [
+    { q: 'إِنَّ', hint: 'Particle' },
+    { q: 'عِلْم', hint: 'Tashkeel' },
+    { q: 'وسيكتبونها', hint: 'Morphology' },
+    { q: 'ك ت ب', hint: 'Root' },
+    { q: 'لِ', hint: 'Harf Jarr' },
+    { q: 'wisdom', hint: 'English' },
+  ];
+
+  main.innerHTML = `
+    ${movedBannerHtml()}
+    <section class="home-hero">
+      <div class="home-eyebrow"><span lang="ar">أهلًا وسهلًا</span><span>${tod}</span></div>
+      <h1 class="home-title">${user ? `Welcome back, <em>${esc(user)}</em>.` : 'Six Arabic lexicons, <em>one quiet desk</em>.'}</h1>
+      <p class="home-sub">
+        Look up any inflected word, spaced root, or English term across Hans Wehr, Lane’s Lexicon, Wiktionary, al-Mufradāt, and Mukhtār al-Ṣiḥāḥ — offline-first and synced across devices.
+      </p>
+      <div class="home-cta-row">
+        <button type="button" class="btn primary" id="home-focus-search">Search dictionary <kbd>/</kbd></button>
+        <button type="button" class="btn" data-go="vocab">Vocabulary folders</button>
+      </div>
+    </section>
+
+    ${studyBanner}
+
+    <div class="panel-head">
+      <h2 class="panel-title">Try a lookup</h2>
     </div>
-    ${histConfirm ? `<div class="confirm" id="hist-confirm"><p>Clear all ${n} search${n === 1 ? '' : 'es'} on all your devices?</p>
-      <div class="actions"><button type="button" class="btn danger" id="hist-clear-yes">Clear</button><button type="button" class="btn quiet" id="hist-clear-no">Cancel</button></div></div>` : ''}
-    ${paused ? '<p class="muted hist-note">Recording is paused. New searches won’t be saved.</p>' : ''}
-    ${n ? `<ul class="hist-list">${items.map(h => `<li class="hist-row" data-hq="${esc(h.q)}">
-      <button type="button" class="hist-q" data-q="${esc(h.q)}"><span class="w" ${qAttr(h.q)}>${esc(h.q)}</span><span class="hist-time">${relTime(h.t)}</span></button>
-      <button type="button" class="hist-del" aria-label="Delete ${esc(h.q)}" title="Delete">×</button></li>`).join('')}</ul>`
-      : '<p class="muted">No searches yet.</p>'}`);
-}
-const rowSel = q => `.hist-row[data-hq="${CSS.escape(q)}"]`;
-function deleteRow(row, { refocus } = {}) {
-  const q = row.dataset.hq;
-  const next = row.nextElementSibling?.dataset.hq ?? row.previousElementSibling?.dataset.hq;
-  deleteSearch(q);   // re-renders synchronously via Store 'change'
-  if (refocus) (next != null ? main.querySelector(rowSel(next) + ' .hist-del') : main.querySelector('#hist-pause'))?.focus();
+    <div class="explore-chips">
+      ${samples.map(s => `<button type="button" class="explore-chip" data-q="${esc(s.q)}">
+        <span ${qAttr(s.q)}>${esc(s.q)}</span><small>${s.hint}</small>
+      </button>`).join('')}
+    </div>
+
+    ${recent.length ? `
+      <div class="panel-head">
+        <h2 class="panel-title">Recent lookups</h2>
+        <button type="button" class="btn quiet sm" data-go="history">View all</button>
+      </div>
+      <ul class="recent-cards">
+        ${recent.map(({ q, t }) => `<li><button type="button" class="recent-card" data-q="${esc(q)}">
+          <span class="rc-word" ${qAttr(q)}>${esc(q)}</span>
+          <span class="rc-time">${relTime(t)}</span>
+        </button></li>`).join('')}
+      </ul>` : ''}
+
+    <div class="panel-head">
+      <h2 class="panel-title">Search tips</h2>
+    </div>
+    <section class="card howto-card">
+      <div class="howto-grid">
+        <div class="howto-item">
+          <span class="howto-sample" lang="ar">وسيكتبونها</span>
+          <span class="howto-desc">Type any inflected Arabic word — prefixes, suffixes & pronouns strip automatically.</span>
+        </div>
+        <div class="howto-item">
+          <span class="howto-sample" lang="ar">ك ت ب</span>
+          <span class="howto-desc">Enter root letters separated by spaces to jump straight to all verb forms (I–X) & derivatives.</span>
+        </div>
+        <div class="howto-item">
+          <span class="howto-sample">book · kitab</span>
+          <span class="howto-desc">Search in English or Latin transliteration. Hamzas, harakat, ة/ه and ى/ي are normalized.</span>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
-// Registered before the generic #main click handler, so these win.
-main.addEventListener('click', e => {
-  const t = e.target;
-  const goEl = t.closest('[data-go]');
-  if (goEl) { e.stopImmediatePropagation(); go(goEl.dataset.go); return; }
-  const del = t.closest('.hist-del');
-  if (del) { e.stopImmediatePropagation(); deleteRow(del.closest('.hist-row'), { refocus: e.detail === 0 || document.activeElement === del }); return; }
-  const id = t.closest('button')?.id;
-  if (id === 'hist-clear') { e.stopImmediatePropagation(); histConfirm = true; historyView(); $('#hist-clear-no')?.focus(); }
-  else if (id === 'hist-clear-no') { e.stopImmediatePropagation(); histConfirm = false; historyView(); $('#hist-clear')?.focus(); }
-  else if (id === 'hist-clear-yes') { e.stopImmediatePropagation(); histConfirm = false; clearHistory(); $('#hist-pause')?.focus(); }
-});
-main.addEventListener('change', e => { if (e.target.id === 'hist-pause') { setPauseHistory(e.target.checked); $('#hist-pause')?.focus(); } });
-
-// Swipe a history row left to delete it (pointer events: touch, pen and mouse).
-let swipe = null, swallowClick = false;
-main.addEventListener('pointerdown', e => {
-  const row = e.target.closest('.hist-row');
-  if (!row || e.button !== 0 || e.target.closest('.hist-del')) return;
-  swipe = { row, id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, active: false };
-});
-main.addEventListener('pointermove', e => {
-  if (!swipe || e.pointerId !== swipe.id) return;
-  const dx = e.clientX - swipe.x, dy = e.clientY - swipe.y;
-  if (!swipe.active) {
-    if (Math.abs(dy) > 10 && Math.abs(dy) >= Math.abs(dx)) { swipe = null; return; }
-    if (dx > -10) return;
-    swipe.active = true;
-    swipe.row.classList.add('swiping');
-    try { swipe.row.setPointerCapture(e.pointerId); } catch {}
+// ==========================================================================
+// 2. SEARCH & DICTIONARY RESULTS
+// ==========================================================================
+function runSearch(q) {
+  const res = resolveQuery(q);
+  if (res.kind === 'empty') return renderHomeView();
+  if (res.kind === 'english') return renderEnglishSearch(res.q);
+  if (res.kind === 'passage') {
+    // Offer direct handoff to Reader or inline word breakdown!
+    return renderMultiWordResult(res.words, res.q);
   }
-  swipe.dx = Math.min(0, dx);
-  swipe.row.style.transform = `translateX(${swipe.dx}px)`;
-});
-function endSwipe(e) {
-  if (!swipe || e.pointerId !== swipe.id) return;
-  const s = swipe; swipe = null;
-  if (!s.active) return;
-  swallowClick = true; setTimeout(() => { swallowClick = false; }, 300);
-  s.row.classList.remove('swiping');
-  if (s.dx < -80 && e.type === 'pointerup') {
-    s.row.classList.add('gone');
-    s.row.style.transform = 'translateX(-110%)';
-    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    setTimeout(() => { if (s.row.isConnected) deleteRow(s.row); }, reduce ? 0 : 160);
-  } else s.row.style.transform = '';
+  if (res.kind === 'roots') return renderRootsResult(res.roots, res.opt, res.q);
+  return renderFallbackResult(res.q, res.n);
 }
-main.addEventListener('pointerup', endSwipe);
-main.addEventListener('pointercancel', endSwipe);
-main.addEventListener('click', e => { if (swallowClick) { swallowClick = false; e.stopImmediatePropagation(); e.preventDefault(); } }, true);
 
-// ---------- sheets (in-page dialogs; never alert/confirm/prompt) ----------
-let openSheet = null;
-function sheet({ title, body, onMount, onClose }) {
-  if (openSheet) openSheet.close();
-  const prev = document.activeElement;
-  const id = 'sheet-' + Math.random().toString(36).slice(2, 8);
+function renderMultiWordResult(words, fullText) {
+  main.innerHTML = `
+    <div class="result-hero">
+      <div class="rh-top">
+        <div>
+          <span class="badge-pill gold">Multi-word lookup</span>
+          <h1 class="rh-word" lang="ar">${esc(fullText)}</h1>
+        </div>
+      </div>
+      <p class="muted" style="margin:8px 0 0;font-family:var(--ui);font-size:13.5px;">Tap any word below to open its full dictionary entry.</p>
+    </div>
+    <div class="en-list">
+      ${words.map(w => {
+        const a = analyze(w)[0];
+        const g = a ? a.stem[2].replace(/;/g, '; ') : (state.hwNorm.get(norm(w))?.[0] ? plain(stripHead(state.hwNorm.get(norm(w))[0])).slice(0, 100) : 'Tap to look up');
+        return `<div class="en-item" data-q="${esc(w)}">
+          <span class="en-item-w" lang="ar">${esc(w)}</span>
+          <span class="en-item-g">${esc(g)}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderFallbackResult(q, n) {
+  const near = nearestMatches(n);
+  main.innerHTML = `
+    <div class="result-hero">
+      <span class="badge-pill again">No exact match</span>
+      <h1 class="rh-word" lang="ar">${esc(q)}</h1>
+      <p class="muted" style="margin:6px 0 0;font-family:var(--ui);font-size:14px;">
+        ${state.W ? 'Check spelling or try one of the closest headwords below.' : 'Wiktionary is still loading — results may appear momentarily.'}
+      </p>
+    </div>
+    ${near.length ? `<div class="panel-head"><h2 class="panel-title">Closest headwords</h2></div>
+      <div class="en-list">${near.map(r => `<div class="en-item" data-pick='${esc(JSON.stringify(r))}'>
+        <span class="en-item-w" lang="ar">${esc(r[1])}</span>
+        <span class="en-item-g">${esc(glossFor(r))}</span>
+      </div>`).join('')}</div>` : ''}
+  `;
+}
+
+async function renderEnglishSearch(q) {
+  const seq = ++resultSeq;
+  if (!hwHave(state.HW.chunks)) {
+    main.innerHTML = `<div class="boot-state"><p class="muted">Loading full Hans Wehr index for English search…</p></div>`;
+    try {
+      await loadAllHw();
+    } catch {
+      if (seq === resultSeq) main.innerHTML = `<div class="card" style="padding:24px"><p class="muted">Could not load Hans Wehr definitions. Check connection and try again.</p></div>`;
+      return;
+    }
+    if (seq !== resultSeq || curView !== 'result') return;
+  }
+  const { tr, scored, total, terms } = searchEnglish(q);
+  const hl = s => {
+    let h = esc(s);
+    for (const t of terms) h = h.replace(new RegExp(`\\b(${t})`, 'gi'), '<mark>$1</mark>');
+    return h;
+  };
+  const itemHtml = e => `<div class="en-item" data-e="${e[0]}">
+    <span class="en-item-w" lang="ar">${esc(e[1])}</span>
+    <span class="en-item-g">${e[6] ? `<i class="muted" style="margin-right:8px">${esc(e[6])}</i>` : ''}${hl(plain(stripHead(e)).slice(0, 220))}</span>
+  </div>`;
+
+  main.innerHTML = `
+    <div class="result-hero">
+      <span class="badge-pill root">English & Transliteration</span>
+      <h1 style="margin:6px 0 0;font:600 30px/1.2 var(--en)">“${esc(q)}”</h1>
+      <p class="muted" style="margin:6px 0 0;font:13.5px var(--ui)">${plural(total, 'Hans Wehr definition')}${tr.length ? ` · ${tr.length} exact transliteration` : ''}</p>
+    </div>
+    ${tr.length ? `<div class="panel-head"><h2 class="panel-title">Exact Transliteration</h2></div><div class="en-list">${tr.map(itemHtml).join('')}</div>` : ''}
+    <div class="panel-head"><h2 class="panel-title">English Matches</h2></div>
+    ${scored.length ? `<div class="en-list">${scored.map(x => itemHtml(x[1])).join('')}</div>` : `<div class="card" style="padding:20px"><p class="muted" style="margin:0">No English definitions matched “${esc(q)}”.</p></div>`}
+  `;
+}
+
+function saveBtnHtml(payload, word) {
+  return `<button type="button" class="bm-btn" data-save="${esc(JSON.stringify(payload))}" data-word="${esc(word)}" aria-pressed="false" aria-label="Save ${esc(word)}" title="Save to vocab">${BOOKMARK_SVG}</button>`;
+}
+
+function syncBookmarkStates(rootEl = main) {
+  const idx = savedIndex();
+  for (const b of rootEl.querySelectorAll('.bm-btn[data-save]')) {
+    let p;
+    try { p = JSON.parse(b.dataset.save); } catch { continue; }
+    const on = idx.has(p.s + '|' + p.r);
+    b.setAttribute('aria-pressed', String(on));
+    b.title = on ? 'Saved — click to manage folders' : 'Save to vocab';
+  }
+}
+
+function renderMorphStrip(parses) {
+  const list = uniqParses(parses).slice(0, 3);
+  if (!list.length) return '';
+  return `<div class="morph-strip">
+    ${list.map(a => {
+      const segs = [];
+      if (a.pre[0]) segs.push(`<span class="m-seg"><span class="m-ar" lang="ar">${esc(a.pre[0])}</span><span class="m-gl">${esc(a.pre[2] || 'prefix')}</span></span>`);
+      segs.push(`<span class="m-seg stem"><span class="m-ar" lang="ar">${esc(a.stem[0])}</span><span class="m-gl">${esc(a.stem[2].split(';')[0] || 'stem')}</span></span>`);
+      if (a.suf[0]) segs.push(`<span class="m-seg"><span class="m-ar" lang="ar">${esc(a.suf[0])}</span><span class="m-gl">${esc(a.suf[2] || 'suffix')}</span></span>`);
+      const R = rootLabel(a.stem);
+      const gl = [a.pre[2], a.stem[2].replace(/;/g, '; '), a.suf[2]].filter(Boolean).join(' + ');
+      return `<div class="morph-row">
+        <div class="morph-pills">${segs.join('<span class="m-plus">+</span>')}</div>
+        <div class="morph-summary">${esc(gl)}${R ? ` · <button type="button" class="btn quiet sm" data-q="${esc(R)}" style="padding:0 6px;min-height:24px"><span lang="ar" style="font-size:17px">${esc(R)}</span></button>` : ''}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+async function renderRootsResult(rootIds, opt, q) {
+  const seq = ++resultSeq;
+  const {
+    particles = [],
+    hits = new Set(),
+    exactHits = new Set(),
+    forms = [],
+    parses = [],
+    bwOnly = [],
+    wikt = [],
+    laneOnly = [],
+    laneWord = '',
+    arWord = '',
+    force = '',
+    retry = null,
+  } = opt;
+
+  if (state.HW && rootIds.length && (force === 'hw' || !resultPrefs().off.has('hw')) && !hwHave(rootIds)) {
+    main.innerHTML = `<div class="boot-state"><p class="muted">Fetching Hans Wehr root definitions…</p></div>`;
+    try {
+      await loadHw(rootIds);
+    } catch {
+      if (seq === resultSeq) main.innerHTML = `<div class="card" style="padding:24px"><p class="muted">Could not load Hans Wehr chunk. Check connection and try again.</p></div>`;
+      return;
+    }
+    if (seq !== resultSeq || curView !== 'result') return;
+  }
+
+  const pr = resultPrefs();
+  const isOn = id => id === force || !pr.off.has(id);
+  const extra = uniqParses(bwOnly).slice(0, 6);
+  const arKeys = arKeysFor(rootIds, [...laneOnly, arWord]);
+  const primaryRoot = rootIds.length ? state.byId.get(rootIds[0]) : null;
+  const exactEntry = [...exactHits].map(id => state.byId.get(id)).find(Boolean);
+  const primaryHit = exactEntry || [...hits].map(id => state.byId.get(id)).find(Boolean) || primaryRoot;
+  const topParticle = particles[0] || null;
+  const heroWord = topParticle ? (topParticle._exact ? topParticle.ar : q) : (hasTashkeel(q) ? q : (primaryHit ? primaryHit[1] : q));
+  const heroTr = topParticle ? topParticle.tr : (primaryHit?.[6] || (wikt.length ? state.W?.entries[wikt[0]]?.[1] : '') || '');
+  const userTypedHarakat = hasTashkeel(q);
+  const hasAnyExactHarakat = exactHits.size > 0 || particles.some(p => p._exact);
+
+  // Count entries per source for the sticky Source Switcher Bar
+  const laneKeysAll = [...new Set([
+    ...rootIds.map(rid => laneKey(norm(state.byId.get(rid)?.[1] || ''))),
+    ...laneOnly.map(lr => laneKey(lr)),
+  ].filter(Boolean))];
+  const totalForms = rootIds.reduce((acc, rid) => acc + (state.formsBy.get(rid)?.length || 0), 0);
+  const totalHwWords = rootIds.reduce((acc, rid) => acc + (state.kids.get(rid)?.length || 0) + 1, 0);
+
+  const availTabs = [{ id: 'all', label: 'All Sources', count: null }];
+  if (particles.length) availTabs.push({ id: 'particles', label: 'Particles', count: particles.length });
+  if (rootIds.length && isOn('hw')) availTabs.push({ id: 'hw', label: 'Hans Wehr', count: totalHwWords });
+  if (totalForms && isOn('hw')) availTabs.push({ id: 'forms', label: 'Verb Forms', count: totalForms });
+  if (wikt.length && isOn('wikt')) availTabs.push({ id: 'wikt', label: 'Wiktionary', count: wikt.length });
+  if (extra.length && isOn('lexicon')) availTabs.push({ id: 'lexicon', label: 'Lexicon', count: extra.length });
+  if (laneKeysAll.length && isOn('lane')) availTabs.push({ id: 'lane', label: 'Lane’s Lexicon', count: laneKeysAll.length });
+  for (const id of AR_IDS) {
+    if (arKeys[id].length && isOn(id)) availTabs.push({ id, label: AR_DICTS[id].name, count: arKeys[id].length });
+  }
+
+  // Hero card
+  const heroHtml = `
+    ${retry ? `<div class="retry-banner">
+      <span>No direct match for <strong lang="ar">${esc(retry.from)}</strong> — showing <strong lang="ar">${esc(retry.word)}</strong> (${retry.why === 'al' ? 'without leading ال' : 'without emphatic نّ'}).</span>
+    </div>` : ''}
+    <section class="result-hero">
+      <div class="rh-top">
+        <div class="rh-word-group">
+          <h1 class="rh-word" lang="ar">${esc(heroWord)}</h1>
+          ${heroTr ? `<span class="rh-tr">${esc(heroTr)}</span>` : ''}
+        </div>
+        <div class="rh-actions">
+          <button type="button" class="btn sm quiet" data-copy="${esc(heroWord)}" title="Copy Arabic word">${COPY_SVG} Copy</button>
+        </div>
+      </div>
+      <div class="rh-meta">
+        ${topParticle ? `<span class="badge-pill gold"><span lang="ar" style="font-size:15px">${esc(topParticle.arCat)}</span> · ${esc(topParticle.enCat)}</span>` : ''}
+        ${!topParticle ? rootIds.map(rid => {
+          const r = state.byId.get(rid);
+          if (!r) return '';
+          const spaced = [...r[1]].join(' ');
+          return `<button type="button" class="root-chip" data-q="${esc(spaced)}" title="Open root">
+            <span>Root</span><span lang="ar">${esc(spaced)}</span>
+          </button>${r[5] ? `<span class="badge-pill gold">Qur’an ${r[5]}×</span>` : ''}`;
+        }).join('') : ''}
+        ${!topParticle && totalForms ? `<span class="badge-pill">${plural(totalForms, 'verb form')}</span>` : ''}
+        ${userTypedHarakat && hasAnyExactHarakat ? `<span class="badge-pill good">Exact harakat prioritized</span>` : ''}
+        ${userTypedHarakat && !hasAnyExactHarakat ? `<span class="badge-pill">No exact harakat match · showing all forms</span>` : ''}
+      </div>
+      ${pr.parse && parses.length ? renderMorphStrip(parses) : ''}
+    </section>
+    <div id="lead-slot"></div>
+  `;
+
+  // Source tabs bar
+  const tabsHtml = availTabs.length > 2 ? `
+    <nav class="source-tabs" aria-label="Filter dictionary sources">
+      ${availTabs.map(t => `<button type="button" class="src-tab" data-src-tab="${t.id}" aria-pressed="${activeSourceTab === t.id}">
+        <span>${esc(t.label)}</span>${t.count != null ? `<span class="cnt">${t.count}</span>` : ''}
+      </button>`).join('')}
+    </nav>` : '';
+
+  // Sections in user order
+  const sections = [];
+  const showSection = id => activeSourceTab === 'all' || activeSourceTab === id;
+
+  // Curated Grammar & Particles section (always prioritized above roots!)
+  if (particles.length && showSection('particles')) {
+    sections.push(`<section class="dict-section" data-sec="particles">
+      <div class="dict-head"><h2 class="dict-title ar-kind">Particles & Grammar (حروف وأدوات)</h2></div>
+      <div class="particle-list">
+        ${particles.map(p => `<article class="particle-card${p._exact ? ' exact' : ''}">
+          <div class="pc-head">
+            <div>
+              <div class="pc-word-wrap">
+                <span class="pc-word" lang="ar">${esc(p.ar)}</span>
+                <span class="pc-tr">${esc(p.tr)}</span>
+                ${p._exact ? `<span class="badge-pill good">Exact match</span>` : ''}
+              </div>
+              <div class="pc-cats">
+                <span class="badge-pill gold" lang="ar" style="font-size:14px;text-transform:none;letter-spacing:0">${esc(p.arCat)}</span>
+                <span class="badge-pill">${esc(p.enCat)}</span>
+              </div>
+            </div>
+            ${saveBtnHtml({ s: 'custom', r: 'p:' + p.ar, w: p.ar, g: `${p.enCat}: ${p.meaning}`, tr: p.tr, note: p.effect }, p.ar)}
+          </div>
+          <div class="pc-effect"><strong>Grammar effect (عمل):</strong> ${esc(p.effect)}</div>
+          <p class="pc-meaning">${esc(p.meaning)}</p>
+          ${p.example ? `<p class="pc-example">${defHtml(p.example)}</p>` : ''}
+          ${p.note ? `<p class="pc-note">${defHtml(p.note)}</p>` : ''}
+        </article>`).join('')}
+      </div>
+    </section>`);
+  }
+
+  // Special focused Verb Forms tab
+  if (activeSourceTab === 'forms' && totalForms) {
+    sections.push(`<section class="dict-section">
+      <div class="dict-head"><h2 class="dict-title">Verb Forms (الأوزان)</h2></div>
+      ${rootIds.map(rid => {
+        const fs = state.formsBy.get(rid) || [];
+        if (!fs.length) return '';
+        const root = state.byId.get(rid);
+        return `<div class="root-folio"><div class="forms-wrap" style="border-bottom:0">
+          <p class="sub-kicker">Root <span lang="ar" style="font-size:18px;color:var(--accent)">${esc([...root[1]].join(' '))}</span></p>
+          ${renderVerbForms(fs, forms)}
+        </div></div>`;
+      }).join('')}
+    </section>`);
+  }
+
+  let hiddenAny = false;
+  for (const id of pr.order) {
+    if (id === 'hw' && rootIds.length) {
+      if (!isOn('hw')) { hiddenAny = true; continue; }
+      if (!showSection('hw')) continue;
+      // When particles matched a 1-letter or core particle, start Hans Wehr collapsed so grammar card shines first
+      const openByDefault = k => (particles.length ? false : (k === 0 || rootIds.length <= 2));
+      sections.push(`<section class="dict-section" data-sec="hw">
+        <div class="dict-head"><h2 class="dict-title">Hans Wehr · ${plural(rootIds.length, 'root')}</h2></div>
+        ${rootIds.map((rid, k) => renderRootFolio(rid, hits, forms, openByDefault(k), exactHits)).join('')}
+      </section>`);
+    } else if (id === 'wikt' && wikt.length) {
+      if (!isOn('wikt')) { hiddenAny = true; continue; }
+      if (!showSection('wikt')) continue;
+      sections.push(`<section class="dict-section" data-sec="wikt">
+        <div class="dict-head"><h2 class="dict-title">Wiktionary</h2></div>
+        <div class="card"><div class="entry-list">${wikt.map(renderWiktEntry).join('')}</div></div>
+      </section>`);
+    } else if (id === 'lexicon' && extra.length) {
+      if (!isOn('lexicon')) { hiddenAny = true; continue; }
+      if (!showSection('lexicon')) continue;
+      sections.push(`<section class="dict-section" data-sec="lexicon">
+        <div class="dict-head"><h2 class="dict-title">Buckwalter Morphological Lexicon</h2></div>
+        <div class="card"><div class="entry-list">${extra.map(renderBwEntry).join('')}</div></div>
+      </section>`);
+    } else if (id === 'lane' && laneKeysAll.length) {
+      if (!isOn('lane')) { hiddenAny = true; continue; }
+      if (!showSection('lane')) continue;
+      const autoOpen = activeSourceTab === 'lane' || laneOnly.length > 0 || !!(laneWord && (state.laneIdx.get(laneWord) || []).some(k => laneKeysAll.includes(laneKey(k))));
+      sections.push(`<section class="dict-section" data-sec="lane">
+        <div class="dict-head"><h2 class="dict-title">Lane’s Lexicon</h2></div>
+        ${laneKeysAll.map((k, j) => `<details class="root-folio lane-details" data-lane-root="${esc(k)}" data-lane-word="${esc(laneWord)}" ${autoOpen && j === 0 ? 'open' : ''}>
+          <summary class="rf-summary">
+            <span class="rf-chevron">▸</span>
+            <span class="rf-letters" lang="ar">${esc([...k].join(' '))}</span>
+            <span class="rf-badges"><span class="badge-pill">Lane’s Lexicon</span></span>
+          </summary>
+          <div class="lane-body" style="padding:14px 20px"><span class="muted">Loading classical entries…</span></div>
+        </details>`).join('')}
+      </section>`);
+    } else if (AR_DICTS[id] && arKeys[id].length) {
+      if (!isOn(id)) { hiddenAny = true; continue; }
+      if (!showSection(id)) continue;
+      sections.push(`<section class="dict-section" data-sec="${id}">
+        <div class="dict-head"><h2 class="dict-title ar-kind">${AR_DICTS[id].name}</h2></div>
+        ${arKeys[id].map((k, j) => `<details class="ar-manuscript ar-details" data-ar-dict="${id}" data-ar-root="${esc(k)}" data-ar-want="${esc(norm(q))}" ${j === 0 ? 'open' : ''}>
+          <summary class="ar-ms-head">
+            <span>${AR_DICTS[id].full}</span>
+            <span lang="ar" style="font:700 22px/1.2 var(--ar);color:var(--gold);letter-spacing:0.1em">${esc([...k].join(' '))}</span>
+          </summary>
+          <div class="ar-ms-body" style="padding:16px 22px"><span class="muted">Loading manuscript entry…</span></div>
+        </details>`).join('')}
+      </section>`);
+    }
+  }
+
+  main.innerHTML = heroHtml + tabsHtml + (sections.join('') || `<div class="card" style="padding:24px"><p class="muted" style="margin:0">Nothing to display with your current dictionary filter.</p></div>`)
+    + (hiddenAny ? `<p class="muted" style="font:13px var(--ui);margin-top:12px">Some dictionaries are turned off in <a href="#settings">Settings</a>.</p>` : '');
+
+  syncBookmarkStates(main);
+
+  // Wire source tabs
+  main.querySelectorAll('[data-src-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeSourceTab = btn.dataset.srcTab;
+      renderRootsResult(rootIds, opt, q);
+    });
+  });
+
+  // Wire in-root instant filter inputs
+  main.querySelectorAll('.rf-filter').forEach(inp => {
+    inp.addEventListener('input', () => {
+      const needle = inp.value.trim().toLowerCase();
+      const nAr = norm(needle);
+      const folio = inp.closest('.root-folio');
+      folio.querySelectorAll('.entry-row, .form-row').forEach(row => {
+        if (!needle) { row.hidden = false; return; }
+        const txt = row.textContent.toLowerCase();
+        const arMatch = nAr && norm(row.textContent).includes(nAr);
+        row.hidden = !(txt.includes(needle) || arMatch);
+      });
+    });
+  });
+
+  // Load any open Lane / Arabic shards
+  main.querySelectorAll('details.lane-details[open]').forEach(fillLaneCard);
+  main.querySelectorAll('details.ar-details[open]').forEach(fillArCard);
+
+  // Lead snippet for ال-stripped classical nouns
+  if (retry && retry.why === 'al' && !hits.size && !forms.length) {
+    fillLeadSlot($('#lead-slot'), retry, arKeys, laneWord);
+  }
+}
+
+function renderVerbForms(fs, hitForms) {
+  return `<div class="form-list">
+    ${fs.map(f => {
+      const pat = VERB_PATTERNS[f[1]] || { wazn: '', sense: '' };
+      const isHit = hitForms.includes(f);
+      return `<div class="form-row${isHit ? ' hit' : ''}">
+        <div class="form-badge-col">
+          <span class="form-num">${esc(f[1])}</span>
+          ${pat.wazn ? `<span class="form-wazn" lang="ar">${pat.wazn}</span>` : ''}
+        </div>
+        <div class="form-main">
+          <div class="form-head">
+            <span class="form-verb" lang="ar">${esc(f[2])}</span>
+            ${pat.sense ? `<span class="form-sense">${pat.sense}</span>` : ''}
+          </div>
+          <div class="def-text">${defHtml(f[3] || '')}</div>
+        </div>
+        ${saveBtnHtml({ s: 'hw', r: 'f' + formIdx(f) }, f[2])}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderRootFolio(rid, hits, hitForms, open, exactHits = new Set()) {
+  const root = state.byId.get(rid);
+  if (!root) return '';
+  const fs = state.formsBy.get(rid) || [];
+  const s = stripHead(root);
+  const cut = s.search(/<b>\s*(I{1,3}|IV|VI{0,3}|IX|X)\s*<\/b>/);
+  const formI = cut >= 0 ? s.slice(0, cut).trim() : s;
+  const rawKids = state.kids.get(rid) || [];
+  // When user typed tashkeel and matched specific derived entry/entries, bubble exact matches to the very top!
+  const hasExact = exactHits.size > 0;
+  const activeHits = hasExact ? exactHits : hits;
+  const ks = hasExact
+    ? [...rawKids.filter(k => exactHits.has(k[0])), ...rawKids.filter(k => !exactHits.has(k[0]))]
+    : rawKids;
+  const anyHit = ks.some(k => activeHits.has(k[0])) || activeHits.has(rid) || fs.some(f => hitForms.includes(f));
+  const gist = plain(formI).replace(/^\S+\s/, '').slice(0, 120);
+  const lat = bwRoot(rid);
+
+  // If a derived entry is an exact harakat match (e.g. عِلْم or عَلَم) and the root itself isn't,
+  // put that exact match above the Verb Forms table so it's the very first thing you read!
+  const promotedExactKids = hasExact && !exactHits.has(rid) ? ks.filter(k => exactHits.has(k[0])) : [];
+  const remainingKids = promotedExactKids.length ? ks.filter(k => !exactHits.has(k[0])) : ks;
+
+  const entryRow = (k, isExact) => `<div class="entry-row${activeHits.has(k[0]) ? ' hit' : ''}" id="w${k[0]}">
+    <div class="entry-head">
+      <div class="entry-hw-group">
+        <span class="entry-hw" lang="ar">${esc(k[1])}</span>
+        ${k[6] ? `<span class="entry-tr">${esc(k[6])}</span>` : ''}
+        ${isExact ? `<span class="badge-pill good">Exact match</span>` : ''}
+      </div>
+      <div class="entry-actions">${saveBtnHtml({ s: 'hw', r: String(k[0]) }, k[1])}</div>
+    </div>
+    <div class="def-text">${defHtml(stripHead(k))}</div>
+  </div>`;
+
+  return `<details class="root-folio" ${open || anyHit ? 'open' : ''}>
+    <summary class="rf-summary">
+      <span class="rf-chevron" aria-hidden="true">▸</span>
+      <span class="rf-letters" lang="ar">${esc([...root[1]].join(' '))}</span>
+      <span class="rf-gist">${esc(gist)}</span>
+      <span class="rf-badges">
+        ${root[5] ? `<span class="badge-pill gold">Qur’an ${root[5]}×</span>` : ''}
+        <span class="badge-pill">${rawKids.length + 1} words</span>
+      </span>
+    </summary>
+    <div class="rf-toolbar">
+      ${rawKids.length >= 6 ? `<input type="search" class="rf-filter" placeholder="Filter ${rawKids.length + 1} entries in this root…" dir="auto">` : `<span class="muted" style="font:12.5px var(--ui)">Hans Wehr 4th ed.</span>`}
+      <div class="rf-ext-links">
+        <a href="https://ejtaal.net/aa/#q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Ejtaal ↗</a>
+        <a href="https://corpus.quran.com/qurandictionary.jsp?q=${encodeURIComponent(lat)}" target="_blank" rel="noopener">Qur’an Corpus ↗</a>
+      </div>
+    </div>
+    ${promotedExactKids.length ? `<div class="entry-list" style="border-bottom:1px solid var(--border)">
+      ${promotedExactKids.map(k => entryRow(k, true)).join('')}
+    </div>` : ''}
+    ${root[3] && formI ? `<div class="entry-list" style="border-bottom:1px solid var(--border)">
+      <div class="entry-row${activeHits.has(rid) ? ' hit' : ''}" id="w${rid}">
+        <div class="entry-head">
+          <div class="entry-hw-group">
+            <span class="entry-hw" lang="ar">${esc(root[1])}</span>
+            ${root[6] ? `<span class="entry-tr">${esc(root[6])}</span>` : ''}
+            <span class="badge-pill root">Form I / Root</span>
+            ${exactHits.has(rid) ? `<span class="badge-pill good">Exact match</span>` : ''}
+          </div>
+          <div class="entry-actions">${saveBtnHtml({ s: 'hw', r: String(rid) }, root[1])}</div>
+        </div>
+        <div class="def-text">${defHtml(formI)}</div>
+      </div>
+    </div>` : ''}
+    ${fs.length ? `<div class="forms-wrap"><p class="sub-kicker">Derived Verb Forms (${fs.length})</p>${renderVerbForms(fs, hitForms)}</div>` : ''}
+    ${remainingKids.length ? `<div class="entry-list">
+      ${remainingKids.map(k => entryRow(k, exactHits.has(k[0]))).join('')}
+    </div>` : ''}
+  </details>`;
+}
+
+function renderWiktEntry(k) {
+  const e = state.W.entries[k];
+  const rs = wRoots(k);
+  const R = rs.length ? [...state.byId.get(rs[0])[1]].join(' ') : '';
+  return `<div class="entry-row">
+    <div class="entry-head">
+      <div class="entry-hw-group">
+        <span class="entry-hw" lang="ar">${esc(e[0])}</span>
+        ${e[1] ? `<span class="entry-tr">${esc(e[1])}</span>` : ''}
+        ${R ? `<button type="button" class="badge-pill root" data-q="${esc(R)}" style="cursor:pointer">Root <span lang="ar" style="font-size:15px">${esc(R)}</span></button>` : ''}
+      </div>
+      <div class="entry-actions">${saveBtnHtml({ s: 'wikt', r: String(k) }, e[0])}</div>
+    </div>
+    <div class="def-text">${defHtml(e[2], ['i', 'br', 'ol', 'li'])}</div>
+  </div>`;
+}
+
+function renderBwEntry(a) {
+  const R = rootLabel(a.stem);
+  const w = a.stem[4] || a.stem[0];
+  const g = a.stem[2].replace(/;/g, '; ');
+  return `<div class="entry-row">
+    <div class="entry-head">
+      <div class="entry-hw-group">
+        <span class="entry-hw" lang="ar">${esc(w)}</span>
+        ${R ? `<span class="badge-pill">root <span lang="ar" style="font-size:15px">${esc(R)}</span></span>` : ''}
+      </div>
+      <div class="entry-actions">${saveBtnHtml({ s: 'lexicon', r: w, w, g, root: R }, w)}</div>
+    </div>
+    <div class="def-text">${esc(g)}</div>
+  </div>`;
+}
+
+async function fillLaneCard(d) {
+  if (d.dataset.filled) return;
+  d.dataset.filled = '1';
+  const k = d.dataset.laneRoot;
+  const want = d.dataset.laneWord;
+  const body = d.querySelector('.lane-body');
+  try {
+    const items = await loadLaneEntries(k);
+    body.style.padding = '0';
+    body.innerHTML = items.length ? `<div class="entry-list">${items.map(([w, def], i) => {
+      const hit = want && (norm(w) === want || norm((def.match(/^[\u0600-\u06FF\u064B-\u0652 ]+/) || [''])[0]) === want);
+      return `<div class="entry-row${hit ? ' hit' : ''}">
+        <div class="entry-head">
+          <span class="entry-hw" lang="ar">${esc(w)}</span>
+          ${saveBtnHtml({ s: 'lane', r: `${k}:${i}` }, w)}
+        </div>
+        <div class="def-text">${defHtml(def, ['i', 'br', 'table', 'tbody', 'tr', 'td', 'center'])}</div>
+      </div>`;
+    }).join('')}</div>` : `<p class="muted" style="padding:16px 20px">No Lane entries.</p>`;
+    syncBookmarkStates(body);
+  } catch {
+    delete d.dataset.filled;
+    body.innerHTML = `<p class="muted">Could not load Lane’s Lexicon shard.</p>`;
+  }
+}
+
+async function fillArCard(d) {
+  if (d.dataset.filled) return;
+  d.dataset.filled = '1';
+  const id = d.dataset.arDict;
+  const k = d.dataset.arRoot;
+  const want = d.dataset.arWant;
+  const body = d.querySelector('.ar-ms-body');
+  try {
+    const shard = await arShard(id, k);
+    const items = shard[k] || [];
+    body.style.padding = '0';
+    body.innerHTML = items.length
+      ? items.map((html, i) => {
+          const head = arHead(id, html, k);
+          return `<div class="ar-ms-entry">
+            <div class="ar-ms-bar">
+              <span class="badge-pill gold">${AR_DICTS[id].name}</span>
+              ${saveBtnHtml({ s: id, r: `${k}:${i}` }, head)}
+            </div>
+            <div class="ar-ms-text" lang="ar" dir="rtl">${arHtml(html, want)}</div>
+          </div>`;
+        }).join('') + `<p class="ar-ms-src">${AR_DICTS[id].full} — text & harakat via al-Maktaba al-Shāmila.</p>`
+      : `<p class="muted" style="padding:16px 20px">No entries.</p>`;
+    syncBookmarkStates(body);
+  } catch {
+    delete d.dataset.filled;
+    body.innerHTML = `<p class="muted">Could not load Arabic dictionary shard.</p>`;
+  }
+}
+
+async function fillLeadSlot(slot, retry, arKeys, laneWord) {
+  if (!slot) return;
+  const w = norm(retry.word), exact = norm(retry.from);
+  const found = [];
+  for (const id of AR_IDS) {
+    for (const k of arKeys[id] || []) {
+      try {
+        const items = (await arShard(id, k))[k] || [];
+        for (const html of items) {
+          const sn = snippet(plain(html.replace(/<br\s*\/?>/g, '\n')), w, exact, 70, 150);
+          if (sn) { found.push({ name: AR_DICTS[id].name, sn, ar: true }); break; }
+        }
+      } catch {}
+      if (found.length) break;
+    }
+    if (found.length >= 2) break;
+  }
+  if (!found.length && laneWord) {
+    for (const k of state.laneIdx.get(laneWord) || []) {
+      const lk = laneKey(k);
+      if (!lk) continue;
+      try {
+        const items = await loadLaneEntries(lk);
+        for (const [, def] of items) {
+          const sn = snippet(plain(def.replace(/<br\s*\/?>/g, '\n')), w, '', 220, 60, /\n/);
+          if (sn) { found.push({ name: 'Lane’s Lexicon', sn, ar: false }); break; }
+        }
+      } catch {}
+      if (found.length) break;
+    }
+  }
+  if (!slot.isConnected || !found.length) return;
+  slot.innerHTML = found.map(({ name, sn, ar }) => `<div class="lead-card">
+    <span class="badge-pill gold" style="margin-bottom:8px">${esc(name)} excerpt</span>
+    <p class="lead-text${ar ? '' : ' en'}" ${ar ? 'lang="ar" dir="rtl"' : ''}>${esc(sn.pre)}<mark lang="ar">${esc(sn.hit)}</mark>${esc(sn.post)}</p>
+  </div>`).join('');
+}
+
+// ==========================================================================
+// 3. VOCAB & FOLDERS VIEWS
+// ==========================================================================
+function renderVocabView() {
+  const rows = tree();
+  const total = liveCards().length;
+  const due = dueCount(liveCards());
+  const liveIds = new Set(rows.map(r => r.f.id));
+  vocabUi.pickedFolders = new Set([...vocabUi.pickedFolders].filter(id => liveIds.has(id)));
+  if (!rows.length) vocabUi.selectFolders = false;
+
+  const pickedCount = vocabUi.pickedFolders.size;
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Vocabulary</h1>
+        <p class="page-sub">${plural(total, 'saved card')} · ${due ? `${due} due for review` : 'all caught up'}</p>
+      </div>
+      <div class="toolbar-row">
+        <button type="button" class="btn primary" id="v-new-folder">New folder</button>
+        ${rows.length ? `<button type="button" class="btn ${vocabUi.selectFolders ? 'soft' : ''}" id="v-select-folders">${vocabUi.selectFolders ? 'Cancel select' : 'Multi-study'}</button>` : ''}
+        ${total ? `<button type="button" class="btn" id="v-export-all">Export</button>` : ''}
+      </div>
+    </div>
+
+    ${rows.length ? `<ul class="folder-grid">
+      ${rows.map(({ f, depth }) => {
+        const cs = cardsDeep(f.id);
+        const st = masteryStats(cs);
+        const paused = isPaused(f.id);
+        const picked = vocabUi.selectFolders && vocabUi.pickedFolders.has(f.id);
+        const pctM = st.total ? (st.mastered / st.total) * 100 : 0;
+        const pctD = st.total ? (st.due / st.total) * 100 : 0;
+        const pctN = st.total ? (st.fresh / st.total) * 100 : 0;
+        return `<li class="folder-card${picked ? ' picked' : ''}">
+          <div class="fc-top">
+            <button type="button" class="fc-open" ${vocabUi.selectFolders ? `data-toggle-f="${esc(f.id)}"` : `data-go="folder=${esc(f.id)}"`}>
+              ${depth > 0 ? `<span class="fc-path">${esc(folderPath(parentOf(f)))} /</span>` : ''}
+              <span class="fc-name" dir="auto">${esc(f.name)}</span>
+            </button>
+            ${vocabUi.selectFolders
+              ? `<input type="checkbox" data-toggle-f="${esc(f.id)}" ${picked ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--accent);cursor:pointer">`
+              : `<button type="button" class="btn quiet sm" data-folder-menu="${esc(f.id)}" aria-label="Folder options">⋯</button>`}
+          </div>
+          <div class="mastery-bar" title="${st.mastered} mastered · ${st.due} due · ${st.fresh} new">
+            <span class="mb-mastered" style="width:${pctM}%"></span>
+            <span class="mb-due" style="width:${pctD}%"></span>
+            <span class="mb-new" style="width:${pctN}%"></span>
+          </div>
+          <div class="fc-stats">
+            <span>${plural(st.total, 'card')}</span>
+            ${paused ? `<span class="badge-pill">Paused</span>` : (st.due + st.fresh) ? `<span class="badge-pill root">${st.due + st.fresh} due</span>` : `<span class="badge-pill good">Done</span>`}
+            ${!vocabUi.selectFolders && st.total ? `<button type="button" class="btn quiet sm" style="margin-left:auto" data-go="${esc(studyHash([f.id], (st.due + st.fresh) && !paused ? 'review' : 'browse'))}">Study →</button>` : ''}
+          </div>
+        </li>`;
+      }).join('')}
+    </ul>` : `<div class="card" style="padding:32px;text-align:center">
+      <p style="margin:0 0 8px;font:600 18px var(--en)">No saved words yet</p>
+      <p class="muted" style="margin:0 0 18px;font:14px var(--ui)">Tap the bookmark icon next to any dictionary entry to save it to a folder, or create your first folder now.</p>
+      <button type="button" class="btn primary" id="v-empty-new-folder">Create a folder</button>
+    </div>`}
+
+    ${vocabUi.selectFolders ? `<div class="select-dock">
+      <span style="font:600 14px var(--ui)">${plural(pickedCount, 'folder')} selected</span>
+      <div class="toolbar-row">
+        <button type="button" class="btn sm" id="vs-browse" ${pickedCount ? '' : 'disabled'}>Browse</button>
+        <button type="button" class="btn sm primary" id="vs-review" ${pickedCount ? '' : 'disabled'}>Review due</button>
+      </div>
+    </div>` : ''}
+  `;
+
+  $('#v-new-folder')?.addEventListener('click', () => newFolderSheet(null));
+  $('#v-empty-new-folder')?.addEventListener('click', () => newFolderSheet(null));
+  $('#v-select-folders')?.addEventListener('click', () => {
+    vocabUi.selectFolders = !vocabUi.selectFolders;
+    if (!vocabUi.selectFolders) vocabUi.pickedFolders.clear();
+    renderVocabView();
+  });
+  $('#v-export-all')?.addEventListener('click', () => exportSheet(liveCards(), 'qamus-all'));
+  $('#vs-browse')?.addEventListener('click', () => go(studyHash([...vocabUi.pickedFolders], 'browse')));
+  $('#vs-review')?.addEventListener('click', () => go(studyHash([...vocabUi.pickedFolders], 'review')));
+  main.querySelectorAll('[data-toggle-f]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      const id = el.dataset.toggleF;
+      if (vocabUi.pickedFolders.has(id)) vocabUi.pickedFolders.delete(id);
+      else vocabUi.pickedFolders.add(id);
+      renderVocabView();
+    });
+  });
+  main.querySelectorAll('[data-folder-menu]').forEach(b => {
+    b.addEventListener('click', () => folderActionsSheet(b.dataset.folderMenu));
+  });
+}
+
+function renderFolderView(id) {
+  const f = folderById(id);
+  if (!f) {
+    main.innerHTML = `<div class="card" style="padding:24px"><p class="muted">Folder not found.</p><button type="button" class="btn" data-go="vocab">Back to Vocab</button></div>`;
+    return;
+  }
+  const subs = childrenOf(id);
+  const direct = cardsIn(id).sort((a, b) => b.createdAt - a.createdAt);
+  const deep = cardsDeep(id);
+  const due = dueCount(deep);
+  const paused = isPaused(id);
+  const flt = vocabUi.filter.trim().toLowerCase();
+  const fltAr = norm(flt);
+  const shown = flt
+    ? direct.filter(c => c.word.toLowerCase().includes(flt) || c.gloss.toLowerCase().includes(flt) || c.note.toLowerCase().includes(flt) || (fltAr && c.key.includes(fltAr)))
+    : direct;
+
+  main.innerHTML = `
+    <div style="margin-bottom:8px">
+      <button type="button" class="btn quiet sm" data-go="vocab">‹ All Folders</button>
+    </div>
+    <div class="page-header">
+      <div>
+        <h1 class="page-title" dir="auto">${esc(f.name)}</h1>
+        <p class="page-sub">${plural(deep.length, 'card')}${paused ? ' · Reviews paused' : due ? ` · ${due} due today` : ' · All caught up'}</p>
+      </div>
+      <div class="toolbar-row">
+        ${deep.length && !paused ? `<button type="button" class="btn primary" data-go="${esc(studyHash([id], 'review'))}">Review${due ? ` (${due})` : ''}</button>` : ''}
+        ${deep.length ? `<button type="button" class="btn soft" data-go="${esc(studyHash([id], 'browse'))}">Browse</button>` : ''}
+        <button type="button" class="btn" id="vf-add-card">+ Add card</button>
+        <button type="button" class="btn quiet" id="vf-import">Import</button>
+        ${deep.length ? `<button type="button" class="btn quiet" id="vf-export">Export</button>` : ''}
+        <button type="button" class="btn quiet" id="vf-menu">⋯</button>
+      </div>
+    </div>
+
+    ${subs.length ? `<div class="panel-head"><h2 class="panel-title">Sub-folders</h2></div>
+      <ul class="folder-grid" style="margin-bottom:18px">${subs.map(sf => {
+        const sc = cardsDeep(sf.id), sd = dueCount(sc);
+        return `<li class="folder-card"><div class="fc-top">
+          <button type="button" class="fc-open" data-go="folder=${esc(sf.id)}"><span class="fc-name" dir="auto">${esc(sf.name)}</span></button>
+          <span class="badge-pill">${sc.length}</span>
+        </div><div class="fc-stats">${sd ? `<span class="badge-pill root">${sd} due</span>` : '<span>Caught up</span>'}</div></li>`;
+      }).join('')}</ul>` : ''}
+
+    ${direct.length ? `
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input type="search" id="vf-filter" class="inp" value="${esc(vocabUi.filter)}" placeholder="Filter cards in ${esc(f.name)}…" style="max-width:360px">
+        <button type="button" class="btn sm ${vocabUi.selectCards ? 'soft' : 'quiet'}" id="vf-select">${vocabUi.selectCards ? 'Done' : 'Select'}</button>
+      </div>
+      <ul class="vocab-card-list">
+        ${shown.map(c => {
+          const st = cardStatus(c);
+          const picked = vocabUi.pickedCards.has(c.id);
+          return `<li class="vcard-row${picked ? ' picked' : ''}">
+            ${vocabUi.selectCards ? `<input type="checkbox" data-pick-c="${esc(c.id)}" ${picked ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--accent);cursor:pointer">` : ''}
+            <button type="button" class="vc-word" data-open-card="${esc(c.id)}" lang="ar" title="Open in dictionary">${esc(c.word)}</button>
+            <button type="button" class="vc-body" data-edit-card="${esc(c.id)}">
+              <div class="vc-gloss">${esc(c.gloss || '(no meaning)')}</div>
+              ${c.context ? `<div class="vc-ctx" lang="ar" dir="rtl">${esc(c.context)}</div>` : ''}
+            </button>
+            <span class="badge-pill ${st.k === 'due' || st.k === 'new' ? 'root' : st.k === 'later' ? 'good' : ''}">${esc(st.label)}</span>
+          </li>`;
+        }).join('')}
+      </ul>` : `<div class="card" style="padding:28px;text-align:center"><p class="muted" style="margin:0 0 12px">This folder has no cards yet.</p><button type="button" class="btn primary" id="vf-add-empty">Add your first card</button></div>`}
+
+    ${vocabUi.selectCards && vocabUi.pickedCards.size ? `<div class="select-dock">
+      <span style="font:600 14px var(--ui)">${plural(vocabUi.pickedCards.size, 'card')} selected</span>
+      <div class="toolbar-row">
+        <button type="button" class="btn sm" id="vf-bulk-move">Move</button>
+        <button type="button" class="btn sm danger" id="vf-bulk-del">Delete</button>
+      </div>
+    </div>` : ''}
+  `;
+
+  $('#vf-add-card')?.addEventListener('click', () => cardSheet({ mode: 'add', folder: id }));
+  $('#vf-add-empty')?.addEventListener('click', () => cardSheet({ mode: 'add', folder: id }));
+  $('#vf-menu')?.addEventListener('click', () => folderActionsSheet(id));
+  $('#vf-export')?.addEventListener('click', () => exportSheet(deep, f.name));
+  $('#vf-import')?.addEventListener('click', () => importSheet(id));
+  $('#vf-filter')?.addEventListener('input', e => {
+    vocabUi.filter = e.target.value;
+    renderFolderView(id);
+    const inp = $('#vf-filter');
+    if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+  });
+  $('#vf-select')?.addEventListener('click', () => {
+    vocabUi.selectCards = !vocabUi.selectCards;
+    if (!vocabUi.selectCards) vocabUi.pickedCards.clear();
+    renderFolderView(id);
+  });
+  main.querySelectorAll('[data-pick-c]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const cid = cb.dataset.pickC;
+      if (cb.checked) vocabUi.pickedCards.add(cid);
+      else vocabUi.pickedCards.delete(cid);
+      renderFolderView(id);
+    });
+  });
+  main.querySelectorAll('[data-open-card]').forEach(b => {
+    b.addEventListener('click', () => {
+      const c = liveCards().find(x => x.id === b.dataset.openCard);
+      if (c) openCardInDict(c);
+    });
+  });
+  main.querySelectorAll('[data-edit-card]').forEach(b => {
+    b.addEventListener('click', () => {
+      const c = liveCards().find(x => x.id === b.dataset.editCard);
+      if (c) cardSheet({ mode: 'edit', card: c });
+    });
+  });
+  $('#vf-bulk-del')?.addEventListener('click', () => {
+    const ids = [...vocabUi.pickedCards];
+    deleteCards(ids);
+    vocabUi.pickedCards.clear();
+    vocabUi.selectCards = false;
+    toast(`Deleted ${plural(ids.length, 'card')}`);
+  });
+  $('#vf-bulk-move')?.addEventListener('click', () => moveCardsSheet([...vocabUi.pickedCards], id));
+}
+
+function openCardInDict(c) {
+  const r = c.ref || '';
+  if (c.source === 'hw' && /^\d+$/.test(r) && state.byId.has(+r)) go({ e: r, q: c.word });
+  else if (c.source === 'hw' && /^f\d+$/.test(r) && state.HW?.forms[+r.slice(1)]) go({ f: r.slice(1), q: c.word });
+  else if (c.source === 'wikt' && /^\d+$/.test(r) && state.W?.entries[+r]) go({ w: r, q: c.word });
+  else if ((c.source === 'lane' || c.source === 'mufradat' || c.source === 'mukhtar') && r.includes(':')) {
+    go({ q: [...r.slice(0, r.lastIndexOf(':'))].join(' ') });
+  } else {
+    go({ q: c.word });
+  }
+}
+
+// ==========================================================================
+// 5. DISTRACTION-FREE STUDY MODE (with Undo!)
+// ==========================================================================
+function shuffled(a) {
+  a = a.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function renderStudyRoute(rawIds, rawMode) {
+  const mode = rawMode === 'review' ? 'review' : 'browse';
+  const ids = [...new Set(rawIds)].filter(id => folderById(id));
+  if (!ids.length) {
+    main.innerHTML = `<div class="card" style="padding:24px"><p class="muted">Those folders no longer exist.</p><button type="button" class="btn" data-go="vocab">Back to Vocab</button></div>`;
+    return;
+  }
+  const key = ids.slice().sort().join(',') + '|' + mode;
+  if (!study || study.key !== key) {
+    const scope = new Set(ids.flatMap(id => [id, ...descendants(id)]));
+    study = {
+      ids, mode, key, scope,
+      dir: 'ar',
+      shuffle: false,
+      onlyAgain: false,
+      hideGot: false,
+      deck: [],
+      idx: 0,
+      flipped: false,
+      reviewed: new Set(),
+      again: 0,
+      done: false,
+      undoStack: [], // NEW: undo support!
+    };
+    rebuildStudyDeck();
+  }
+  renderStudyView();
+}
+
+function studyScopeCards() {
+  return liveCards()
+    .filter(c => study.scope.has(cardFolder(c)))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+function rebuildStudyDeck() {
+  if (study.mode === 'browse') {
+    let list = studyScopeCards();
+    if (study.onlyAgain) list = list.filter(c => vdoc().reviews[c.id]?.mark === MARK_AGAIN);
+    if (study.hideGot) list = list.filter(c => vdoc().reviews[c.id]?.mark !== MARK_GOT);
+    study.deck = (study.shuffle ? shuffled(list) : list).map(c => c.id);
+    study.idx = 0;
+    study.done = false;
+  } else {
+    const eod = endOfDay(Date.now());
+    const cards = studyScopeCards().filter(c => !cardPaused(c));
+    const due = cards.filter(c => vdoc().reviews[c.id]?.last && vdoc().reviews[c.id].due <= eod)
+      .sort((a, b) => vdoc().reviews[a.id].due - vdoc().reviews[b.id].due);
+    const fresh = cards.filter(c => !vdoc().reviews[c.id]?.last);
+    const q = [...due, ...fresh].map(c => c.id);
+    study.deck = study.shuffle ? shuffled(q) : q;
+    study.idx = 0;
+    study.reviewed = new Set();
+    study.again = 0;
+    study.done = !study.deck.length;
+  }
+  study.flipped = false;
+}
+
+function markContextHtml(c) {
+  const t = c.context || '';
+  const target = norm(c.highlight || c.word || '');
+  if (!target) return esc(t);
+  const skip = new RegExp(DIAC.source);
+  const map = [];
+  let flat = '';
+  for (let i = 0; i < t.length; i++) {
+    if (skip.test(t[i])) continue;
+    flat += norm(t[i]) || t[i];
+    map.push(i);
+  }
+  const at = flat.indexOf(target);
+  if (at < 0) return esc(t);
+  let end = map[at + target.length - 1] + 1;
+  while (end < t.length && skip.test(t[end])) end++;
+  return esc(t.slice(0, map[at])) + '<mark>' + esc(t.slice(map[at], end)) + '</mark>' + esc(t.slice(end));
+}
+
+function renderStudyView() {
+  const title = study.ids.length > 1 ? `${study.ids.length} folders` : folderById(study.ids[0])?.name || 'Study';
+  const backDest = study.ids.length > 1 ? 'vocab' : 'folder=' + study.ids[0];
+  const total = study.deck.length;
+  const pct = total ? Math.round(((study.done ? total : study.idx) / total) * 100) : 100;
+  const card = !study.done && total ? liveCards().find(c => c.id === study.deck[study.idx]) : null;
+  const prevRev = card ? vdoc().reviews[card.id] : null;
+
+  let stageHtml = '';
+  if (study.mode === 'review' && study.done) {
+    const eodT = endOfDay(Date.now(), 1);
+    const tomorrow = studyScopeCards().filter(c => {
+      if (cardPaused(c)) return false;
+      const r = vdoc().reviews[c.id];
+      return !r?.last || r.due <= eodT;
+    }).length;
+    stageHtml = `<div class="card" style="padding:40px 26px;text-align:center">
+      <div style="font:700 42px/1.4 var(--ar);color:var(--accent)">أحسنت</div>
+      <h2 style="margin:6px 0 8px;font:600 24px var(--en)">${study.reviewed.size ? 'Session complete' : 'Nothing due today'}</h2>
+      <p class="muted" style="margin:0 0 6px;font:14.5px var(--ui)">
+        ${study.reviewed.size ? `${plural(study.reviewed.size, 'card')} reviewed${study.again ? ` · ${study.again} repeated` : ''}. ` : ''}
+        <strong>${tomorrow}</strong> due tomorrow.
+      </p>
+      <div class="toolbar-row" style="justify-content:center;margin-top:20px">
+        <button type="button" class="btn" data-go="${esc(backDest)}">Done</button>
+        <button type="button" class="btn primary" data-go="${esc(studyHash(study.ids, 'browse'))}">Browse all cards</button>
+      </div>
+    </div>`;
+  } else if (!card) {
+    stageHtml = `<div class="card" style="padding:36px 24px;text-align:center"><p class="muted">No cards match the current filter.</p></div>`;
+  } else {
+    const lines = (card.gloss || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
+    const front = study.dir === 'en'
+      ? `<p class="fc-en-front">${lines.length ? lines.map(esc).join('<br>') : '(no meaning)'}</p>`
+      : `<p class="fc-word" lang="ar">${esc(card.word)}</p>
+         ${card.highlight && card.highlight.trim() !== card.word.trim() ? `<div class="muted" style="font:22px/1.6 var(--ar)">${esc(card.highlight)}</div>` : ''}`;
+
+    stageHtml = `<div class="fc-stage">
+      <div class="fc-card${study.flipped ? ' flipped' : ''}" id="fc-card" role="button" tabindex="0">
+        <div class="fc-face fc-front">
+          <div class="fc-meta">
+            <span>${study.idx + 1} / ${total}</span>
+            <span class="badge-pill">${esc(folderById(cardFolder(card))?.name || '')}</span>
+          </div>
+          <div class="fc-front-center">${front}</div>
+          <div class="muted" style="text-align:center;font:12.5px var(--ui)">Tap card or press <kbd>Space</kbd> to reveal</div>
+        </div>
+        <div class="fc-face fc-back">
+          <div class="fc-meta">
+            <span>${study.idx + 1} / ${total}</span>
+            <span class="badge-pill">${esc(folderById(cardFolder(card))?.name || '')}</span>
+          </div>
+          <p class="fc-back-word" lang="ar">${esc(card.word)}</p>
+          ${card.arGloss ? `<p class="fc-argloss" lang="ar">${esc(card.arGloss)}</p>` : ''}
+          ${lines.map(l => `<p class="fc-gloss">${esc(l)}</p>`).join('')}
+          ${card.translit ? `<p class="muted" style="margin:0;font:italic 15px var(--en)">${esc(card.translit)}</p>` : ''}
+          ${card.note ? `<p class="muted" style="margin:0;font:14px/1.5 var(--ui)">Note: ${esc(card.note)}</p>` : ''}
+          ${card.context ? `<div class="fc-ctx-block" lang="ar" dir="rtl">${markContextHtml(card)}</div>` : ''}
+          ${card.root ? `<div style="margin-top:auto;padding-top:8px"><button type="button" class="root-chip" data-q="${esc(card.root)}"><span>Root</span><span lang="ar">${esc(card.root)}</span></button></div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  let dockHtml = '';
+  if (card) {
+    if (study.mode === 'review') {
+      if (!study.flipped) {
+        dockHtml = `<div class="study-dock"><div class="study-dock-inner review single">
+          <button type="button" class="grade-btn primary" id="st-flip">Show answer <small style="opacity:.85">Space</small></button>
+        </div></div>`;
+      } else {
+        dockHtml = `<div class="study-dock"><div class="study-dock-inner review">
+          ${['Again', 'Hard', 'Good', 'Easy'].map((lbl, g) => `<button type="button" class="grade-btn g${g}" data-grade="${g}">
+            <span>${lbl}</span><small>${intervalLabel(prevRev, g)} · ${g + 1}</small>
+          </button>`).join('')}
+        </div></div>`;
+      }
+    } else {
+      const m = vdoc().reviews[card.id]?.mark || 0;
+      dockHtml = `<div class="study-dock"><div class="study-dock-inner browse">
+        <button type="button" class="grade-btn" id="st-prev" ${study.idx > 0 ? '' : 'disabled'}>‹</button>
+        <button type="button" class="grade-btn ${m === MARK_AGAIN ? 'g0' : ''}" id="st-again">Again</button>
+        <button type="button" class="grade-btn ${m === MARK_GOT ? 'g2' : ''}" id="st-got">Got it</button>
+        <button type="button" class="grade-btn" id="st-next" ${study.idx < total - 1 ? '' : 'disabled'}>›</button>
+      </div></div>`;
+    }
+  }
+
+  main.innerHTML = `<div class="study-wrap">
+    <div class="study-top">
+      <button type="button" class="btn quiet sm" data-go="${esc(backDest)}">‹ Exit</button>
+      <strong style="font:600 17px var(--en)" dir="auto">${esc(title)}</strong>
+      <div class="toolbar-row">
+        ${study.undoStack.length ? `<button type="button" class="btn sm quiet" id="st-undo" title="Undo last grade (Z)">↩ Undo</button>` : ''}
+        <button type="button" class="btn sm quiet" id="st-dir">${study.dir === 'ar' ? 'AR → EN' : 'EN → AR'}</button>
+      </div>
+    </div>
+
+    <div class="study-progress-track"><div class="study-progress-fill" style="width:${pct}%"></div></div>
+
+    <div class="study-pills">
+      <div class="seg-ctrl" role="group" aria-label="Study mode">
+        <button type="button" class="seg-btn" data-st-mode="review" aria-pressed="${study.mode === 'review'}">Review (SRS)</button>
+        <button type="button" class="seg-btn" data-st-mode="browse" aria-pressed="${study.mode === 'browse'}">Browse</button>
+      </div>
+      <button type="button" class="btn sm pill ${study.shuffle ? 'soft' : ''}" id="st-shuffle">Shuffle</button>
+      ${study.mode === 'browse' ? `
+        <button type="button" class="btn sm pill ${study.onlyAgain ? 'soft' : ''}" id="st-only-again">Only “Again”</button>
+        <button type="button" class="btn sm pill ${study.hideGot ? 'soft' : ''}" id="st-hide-got">Hide “Got it”</button>
+      ` : ''}
+    </div>
+
+    ${stageHtml}
+    ${dockHtml}
+  </div>`;
+
+  $('#fc-card')?.addEventListener('click', e => {
+    if (e.target.closest('button')) return;
+    flipStudyCard();
+  });
+  $('#st-flip')?.addEventListener('click', flipStudyCard);
+  $('#st-prev')?.addEventListener('click', () => moveStudy(-1));
+  $('#st-next')?.addEventListener('click', () => moveStudy(1));
+  $('#st-again')?.addEventListener('click', () => markStudyCard(MARK_AGAIN));
+  $('#st-got')?.addEventListener('click', () => markStudyCard(MARK_GOT));
+  $('#st-undo')?.addEventListener('click', undoStudyGrade);
+  $('#st-dir')?.addEventListener('click', () => { study.dir = study.dir === 'ar' ? 'en' : 'ar'; study.flipped = false; renderStudyView(); });
+  $('#st-shuffle')?.addEventListener('click', () => { study.shuffle = !study.shuffle; rebuildStudyDeck(); renderStudyView(); });
+  $('#st-only-again')?.addEventListener('click', () => { study.onlyAgain = !study.onlyAgain; if (study.onlyAgain) study.hideGot = false; rebuildStudyDeck(); renderStudyView(); });
+  $('#st-hide-got')?.addEventListener('click', () => { study.hideGot = !study.hideGot; if (study.hideGot) study.onlyAgain = false; rebuildStudyDeck(); renderStudyView(); });
+  main.querySelectorAll('[data-st-mode]').forEach(b => {
+    b.addEventListener('click', () => go(studyHash(study.ids, b.dataset.stMode)));
+  });
+  main.querySelectorAll('[data-grade]').forEach(b => {
+    b.addEventListener('click', () => gradeStudyCard(+b.dataset.grade));
+  });
+}
+
+function flipStudyCard() {
+  if (!study || study.done || !study.deck.length) return;
+  study.flipped = !study.flipped;
+  const el = $('#fc-card');
+  if (el) el.classList.toggle('flipped', study.flipped);
+  // Swap dock smoothly without nuking the card element so 3D flip finishes cleanly!
+  const dock = main.querySelector('.study-dock');
+  if (dock && study.mode === 'review') {
+    const card = liveCards().find(c => c.id === study.deck[study.idx]);
+    const prevRev = card ? vdoc().reviews[card.id] : null;
+    if (!study.flipped) {
+      dock.innerHTML = `<div class="study-dock-inner review single"><button type="button" class="grade-btn primary" id="st-flip">Show answer <small>Space</small></button></div>`;
+      $('#st-flip')?.addEventListener('click', flipStudyCard);
+    } else {
+      dock.innerHTML = `<div class="study-dock-inner review">${['Again', 'Hard', 'Good', 'Easy'].map((lbl, g) =>
+        `<button type="button" class="grade-btn g${g}" data-grade="${g}"><span>${lbl}</span><small>${intervalLabel(prevRev, g)} · ${g + 1}</small></button>`).join('')}</div>`;
+      dock.querySelectorAll('[data-grade]').forEach(b => b.addEventListener('click', () => gradeStudyCard(+b.dataset.grade)));
+    }
+  }
+}
+
+function moveStudy(d) {
+  if (!study || study.mode !== 'browse') return;
+  const n = study.idx + d;
+  if (n < 0 || n >= study.deck.length) return;
+  study.idx = n;
+  study.flipped = false;
+  renderStudyView();
+}
+
+function markStudyCard(kind) {
+  if (!study || !study.deck.length) return;
+  const id = study.deck[study.idx];
+  const cur = vdoc().reviews[id]?.mark || 0;
+  const next = cur === kind ? 0 : kind;
+  Store.mutate(d => {
+    const r = { ...(d.reviews[id] || {}), updatedAt: Date.now() };
+    if (next) r.mark = next; else delete r.mark;
+    d.reviews[id] = r;
+  });
+  if (next && study.idx < study.deck.length - 1) study.idx++;
+  study.flipped = false;
+  renderStudyView();
+}
+
+function gradeStudyCard(g) {
+  if (!study || study.mode !== 'review' || study.done || !study.flipped) return;
+  const id = study.deck[study.idx];
+  const prevReview = vdoc().reviews[id] ? structuredClone(vdoc().reviews[id]) : null;
+  study.undoStack.push({
+    id,
+    prevReview,
+    deck: study.deck.slice(),
+    idx: study.idx,
+    again: study.again,
+    wasReviewed: study.reviewed.has(id),
+  });
+  Store.mutate(d => { d.reviews[id] = schedule(d.reviews[id], g, Date.now()); });
+  study.reviewed.add(id);
+  if (g === 0) {
+    study.again++;
+    study.deck.splice(Math.min(study.deck.length, study.idx + 4), 0, id);
+  }
+  study.idx++;
+  study.flipped = false;
+  if (study.idx >= study.deck.length) study.done = true;
+  renderStudyView();
+}
+
+function undoStudyGrade() {
+  if (!study || !study.undoStack.length) return;
+  const snap = study.undoStack.pop();
+  Store.mutate(d => {
+    if (snap.prevReview) d.reviews[snap.id] = snap.prevReview;
+    else delete d.reviews[snap.id];
+  });
+  study.deck = snap.deck;
+  study.idx = snap.idx;
+  study.again = snap.again;
+  if (!snap.wasReviewed) study.reviewed.delete(snap.id);
+  study.done = false;
+  study.flipped = true;
+  toast('Undid last grade');
+  renderStudyView();
+}
+
+// ==========================================================================
+// 6. HISTORY VIEW
+// ==========================================================================
+let histConfirmClear = false;
+function renderHistoryView() {
+  const items = liveHistory();
+  const paused = historyPaused();
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Search History</h1>
+        <p class="page-sub">${plural(items.length, 'recorded lookup')}</p>
+      </div>
+      <div class="toolbar-row">
+        <label class="switch"><input type="checkbox" id="hist-pause" ${paused ? 'checked' : ''}><span class="track"></span>Pause recording</label>
+        ${items.length && !histConfirmClear ? `<button type="button" class="btn danger-ghost" id="hist-clear-ask">Clear all</button>` : ''}
+      </div>
+    </div>
+
+    ${histConfirmClear ? `<div class="card" style="padding:16px 20px;margin-bottom:14px;border-color:var(--danger)">
+      <p style="margin:0 0 10px;font:500 14.5px var(--ui)">Clear all ${items.length} searches across your synced devices?</p>
+      <div class="toolbar-row">
+        <button type="button" class="btn danger sm" id="hist-clear-yes">Clear history</button>
+        <button type="button" class="btn quiet sm" id="hist-clear-no">Cancel</button>
+      </div>
+    </div>` : ''}
+
+    ${items.length ? `<div class="card"><div class="entry-list">
+      ${items.map(h => `<div class="entry-row" style="padding:8px 16px;flex-direction:row;align-items:center;justify-content:space-between">
+        <button type="button" class="fc-open" data-q="${esc(h.q)}" style="display:flex;align-items:baseline;gap:14px">
+          <span ${qAttr(h.q)} style="font-size:${isAr(h.q) ? '24px' : '16px'};font-weight:600">${esc(h.q)}</span>
+          <span class="muted" style="font:12.5px var(--ui)">${relTime(h.t)}</span>
+        </button>
+        <button type="button" class="btn quiet sm" data-del-q="${esc(h.q)}" aria-label="Remove">×</button>
+      </div>`).join('')}
+    </div></div>` : `<div class="card" style="padding:28px;text-align:center"><p class="muted" style="margin:0">No searches recorded yet.</p></div>`}
+  `;
+
+  $('#hist-pause')?.addEventListener('change', e => {
+    Store.mutate(d => { d.settings = { ...d.settings, pauseHistory: e.target.checked, updatedAt: Date.now() }; });
+  });
+  $('#hist-clear-ask')?.addEventListener('click', () => { histConfirmClear = true; renderHistoryView(); });
+  $('#hist-clear-no')?.addEventListener('click', () => { histConfirmClear = false; renderHistoryView(); });
+  $('#hist-clear-yes')?.addEventListener('click', () => { histConfirmClear = false; clearHistory(); toast('History cleared'); });
+  main.querySelectorAll('[data-del-q]').forEach(b => {
+    b.addEventListener('click', () => deleteSearch(b.dataset.delQ));
+  });
+}
+
+// ==========================================================================
+// 7. APPEARANCE & SETTINGS STUDIO
+// ==========================================================================
+function renderSettingsView() {
+  const pr = resultPrefs();
+  const curTheme = getTheme();
+  const curFont = getArFont();
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Settings & Appearance</h1>
+        <p class="page-sub">Tune your reading canvas, Arabic typeface, text scale, and dictionary priority.</p>
+      </div>
+    </div>
+
+    <div class="settings-stack">
+      <section class="card settings-card">
+        <h3>Reading Theme</h3>
+        <p class="sub">Choose a surface comfortable for long Arabic reading sessions.</p>
+        <div class="theme-swatches">
+          <button type="button" class="swatch-btn" data-set-theme="paper" aria-pressed="${curTheme === 'paper'}">
+            <span class="swatch-preview sw-paper" lang="ar">قاموس</span>
+            <span>Paper Light</span>
+          </button>
+          <button type="button" class="swatch-btn" data-set-theme="sepia" aria-pressed="${curTheme === 'sepia'}">
+            <span class="swatch-preview sw-sepia" lang="ar">قاموس</span>
+            <span>Parchment Sepia</span>
+          </button>
+          <button type="button" class="swatch-btn" data-set-theme="night" aria-pressed="${curTheme === 'night'}">
+            <span class="swatch-preview sw-night" lang="ar">قاموس</span>
+            <span>Obsidian Night</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="card settings-card">
+        <h3>Arabic Typeface</h3>
+        <p class="sub">Switch the Naskh script used for headwords, passages, and flashcards.</p>
+        <div class="font-grid">
+          ${AR_FONTS.map(f => `<button type="button" class="font-btn" data-set-font="${f.id}" aria-pressed="${curFont === f.id}">
+            <span class="sample" lang="ar" style="font-family:'${f.name}',serif">${f.sample}</span>
+            <span class="fname">${f.name} · ${f.desc}</span>
+          </button>`).join('')}
+        </div>
+      </section>
+
+      <section class="card settings-card">
+        <h3>Text Size</h3>
+        <p class="sub">Scale English and classical Arabic dictionaries independently (syncs with your account).</p>
+        <div class="setting-row">
+          <div>
+            <div style="font:600 14.5px var(--ui)">English definitions</div>
+            <div class="def-text" style="margin-top:2px">to write; to record, put down in writing <span class="ar">كَتَبَ</span></div>
+          </div>
+          <span class="stepper">
+            <button type="button" data-step="en" data-d="-1" ${pr.size.en <= SIZE_MIN ? 'disabled' : ''}>A−</button>
+            <output>${pr.size.en}%</output>
+            <button type="button" data-step="en" data-d="1" ${pr.size.en >= SIZE_MAX ? 'disabled' : ''}>A+</button>
+          </span>
+        </div>
+        <div class="setting-row">
+          <div>
+            <div style="font:600 14.5px var(--ui)">Arabic dictionaries</div>
+            <div style="font:calc(22px * var(--t-ar))/1.7 var(--ar);margin-top:2px" lang="ar">الكِتَابُ في الأصلِ مَصدَرٌ ثُمَّ سُمِّيَ بِهِ المَكتُوبُ</div>
+          </div>
+          <span class="stepper">
+            <button type="button" data-step="ar" data-d="-1" ${pr.size.ar <= SIZE_MIN ? 'disabled' : ''}>A−</button>
+            <output>${pr.size.ar}%</output>
+            <button type="button" data-step="ar" data-d="1" ${pr.size.ar >= SIZE_MAX ? 'disabled' : ''}>A+</button>
+          </span>
+        </div>
+      </section>
+
+      <section class="card settings-card">
+        <h3>Dictionaries & Order</h3>
+        <p class="sub">Toggle which lexicons appear and reorder their priority in “All Sources”.</p>
+        ${pr.order.map((id, i) => {
+          const d = DICTS.find(x => x.id === id);
+          const on = !pr.off.has(id);
+          return `<div class="setting-row">
+            <label class="switch" style="flex:1">
+              <input type="checkbox" data-dict-toggle="${id}" ${on ? 'checked' : ''}>
+              <span class="track"></span>
+              <span><strong>${esc(d.name)}</strong><br><span class="muted" style="font-size:12.5px">${esc(d.desc)}</span></span>
+            </label>
+            <div class="toolbar-row">
+              <button type="button" class="btn quiet sm" data-dict-move="${id}" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+              <button type="button" class="btn quiet sm" data-dict-move="${id}" data-dir="1" ${i === pr.order.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+            </div>
+          </div>`;
+        }).join('')}
+        <div class="setting-row">
+          <label class="switch">
+            <input type="checkbox" id="set-parse" ${pr.parse ? 'checked' : ''}>
+            <span class="track"></span>
+            <span><strong>Morphological Breakdown</strong><br><span class="muted" style="font-size:12.5px">Show prefix · stem · suffix pills in the result header</span></span>
+          </label>
+        </div>
+        <div style="margin-top:14px">
+          <button type="button" class="btn quiet sm" id="set-reset">Reset dictionary settings</button>
+        </div>
+      </section>
+    </div>
+  `;
+
+  main.querySelectorAll('[data-set-theme]').forEach(b => {
+    b.addEventListener('click', () => { applyTheme(b.dataset.setTheme); renderSettingsView(); });
+  });
+  main.querySelectorAll('[data-set-font]').forEach(b => {
+    b.addEventListener('click', () => { applyArFont(b.dataset.setFont); renderSettingsView(); });
+  });
+  main.querySelectorAll('[data-step]').forEach(b => {
+    b.addEventListener('click', () => {
+      const k = b.dataset.step, d = +b.dataset.d;
+      const size = { ...resultPrefs().size };
+      size[k] = textSize(size[k] + d * SIZE_STEP);
+      setResultPrefs({ size });
+    });
+  });
+  main.querySelectorAll('[data-dict-toggle]').forEach(inp => {
+    inp.addEventListener('change', () => {
+      const off = new Set(resultPrefs().off);
+      if (inp.checked) off.delete(inp.dataset.dictToggle);
+      else off.add(inp.dataset.dictToggle);
+      setResultPrefs({ off });
+    });
+  });
+  main.querySelectorAll('[data-dict-move]').forEach(b => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.dictMove, dir = +b.dataset.dir;
+      const order = resultPrefs().order.slice();
+      const i = order.indexOf(id);
+      const j = i + dir;
+      if (j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      setResultPrefs({ order });
+    });
+  });
+  $('#set-parse')?.addEventListener('change', e => setResultPrefs({ parse: e.target.checked }));
+  $('#set-reset')?.addEventListener('click', () => {
+    setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
+    toast('Dictionary settings reset');
+  });
+}
+
+// ==========================================================================
+// 8. SHEETS: Save to Folder, Card Edit/Add, Folder Actions, Export/Import, Account
+// ==========================================================================
+function openSheet({ title, body, onMount, onClose }) {
+  if (openSheetApi) openSheetApi.close();
   const wrap = document.createElement('div');
   wrap.className = 'sheet-backdrop';
-  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true" aria-labelledby="${id}">
-    <div class="sheet-head"><h2 id="${id}">${title}</h2><button type="button" class="sheet-x" aria-label="Close">×</button></div>
-    <div class="sheet-body">${body}</div></div>`;
+  wrap.innerHTML = `<div class="sheet" role="dialog" aria-modal="true">
+    <div class="sheet-head"><h2>${title}</h2><button type="button" class="sheet-x" aria-label="Close">×</button></div>
+    <div>${body}</div>
+  </div>`;
   const panel = wrap.firstElementChild;
-  const focusables = () => [...panel.querySelectorAll('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
-    .filter(el => !el.disabled && el.offsetParent !== null);
-  const onKey = e => {
-    if (e.key === 'Escape') { e.preventDefault(); api.close(); }
-    else if (e.key === 'Tab') {
-      const f = focusables(); if (!f.length) return;
-      const i = f.indexOf(document.activeElement);
-      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
-      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
-    }
-  };
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); api.close(); } };
   const api = {
     el: panel,
     close() {
-      if (openSheet !== api) return;
-      openSheet = null;
+      if (openSheetApi !== api) return;
+      openSheetApi = null;
       document.removeEventListener('keydown', onKey, true);
       wrap.remove();
       document.body.classList.remove('sheet-open');
       onClose?.();
-      if (prev && prev.isConnected) prev.focus({ preventScroll: true });
     },
   };
   wrap.addEventListener('click', e => { if (e.target === wrap) api.close(); });
@@ -1374,35 +2116,389 @@ function sheet({ title, body, onMount, onClose }) {
   document.addEventListener('keydown', onKey, true);
   document.body.appendChild(wrap);
   document.body.classList.add('sheet-open');
-  openSheet = api;
+  openSheetApi = api;
   onMount?.(panel, api);
-  const first = panel.querySelector('[autofocus]') || focusables().find(el => !el.classList.contains('sheet-x'));
-  first?.focus();
+  panel.querySelector('[autofocus]')?.focus();
   return api;
 }
 
-function relTime(t) {
-  const s = Math.round((Date.now() - t) / 1000);
-  if (s < 45) return 'just now';
-  if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' min ago';
-  if (s < 86400) return Math.round(s / 3600) + ' h ago';
-  return new Date(t).toLocaleDateString();
+async function prefillFromPayload(p) {
+  const f = { word: '', gloss: '', arGloss: '', root: '', translit: '', context: '', highlight: '', note: '', tags: [], source: p.s, ref: String(p.r ?? '') };
+  const rootOf = rid => { const r = state.byId.get(rid); return r ? [...r[1]].join(' ') : ''; };
+  if (p.s === 'hw' && /^f\d+$/.test(f.ref)) {
+    const x = state.HW.forms[+f.ref.slice(1)];
+    if (!hwHave([x[0]])) await loadHw([x[0]]);
+    f.word = x[2]; f.gloss = shortGloss(x[3]); f.root = rootOf(x[0]);
+  } else if (p.s === 'hw') {
+    const e = state.byId.get(+f.ref);
+    if (!hwHave([e[4]])) await loadHw([e[4]]);
+    let d = plain(stripHead(e));
+    if (e[6] && d.startsWith(e[6])) d = d.slice(e[6].length).trim();
+    f.word = e[1]; f.gloss = shortGloss(d); f.root = rootOf(e[4]); f.translit = e[6] || '';
+  } else if (p.s === 'wikt') {
+    const e = state.W.entries[+f.ref];
+    const m = e[2].match(/<li>([\s\S]*?)<\/li>/);
+    const rs = wRoots(+f.ref);
+    f.word = e[0]; f.translit = e[1] || ''; f.gloss = shortGloss(m ? m[1] : e[2]); f.root = rs.length ? rootOf(rs[0]) : '';
+  } else if (p.s === 'lane') {
+    const at = f.ref.lastIndexOf(':'), k = f.ref.slice(0, at), i = +f.ref.slice(at + 1);
+    const items = await loadLaneEntries(k);
+    const [w, def] = items[i];
+    f.word = w; f.root = [...k].join(' ');
+    f.gloss = shortGloss(def.startsWith(w) ? def.slice(w.length) : def);
+  } else if (AR_DICTS[p.s]) {
+    const at = f.ref.lastIndexOf(':'), { head, html } = await arEntry(p.s, f.ref);
+    f.word = head; f.root = [...f.ref.slice(0, at)].join(' ');
+    f.arGloss = shortGloss(plain(html.replace(/^<b>.*?<\/b>(:\s*|<br>)/, '')));
+  } else if (p.s === 'lexicon') {
+    f.word = p.w || ''; f.gloss = shortGloss(p.g || ''); f.root = p.root || '';
+  } else if (p.s === 'custom') {
+    f.word = p.w || ''; f.gloss = p.g || ''; f.translit = p.tr || ''; f.note = p.note || '';
+  }
+  // Smart enhancement: if the user searched an inflected form (e.g. يكتبون) different from headword, preserve it as highlight!
+  if (lastSearchedRaw && isAr(lastSearchedRaw) && norm(lastSearchedRaw) !== norm(f.word)) {
+    f.highlight = lastSearchedRaw;
+  }
+  return f;
 }
 
-// ---------- login + account ----------
-const acctEl = $('#acct');
-// Suggested usernames read like a key: an Arabic word and four random digits (qalam-4821).
-// The login itself is unchanged: any 3–32 letters, digits, "-" or "_" still work.
+function saveToFolderSheet(payload, word) {
+  const key = payload.s + '|' + payload.r;
+  const fieldsP = prefillFromPayload(payload).catch(() => ({ word, source: payload.s, ref: String(payload.r ?? '') }));
+  const savedHere = id => (savedIndex().get(key) || []).filter(c => cardFolder(c) === id);
+  const rows = tree();
+  if (!rows.some(({ f }) => f.id === INBOX)) rows.unshift({ f: VIRTUAL_INBOX, depth: 0 });
+
+  openSheet({
+    title: 'Save to folder',
+    body: `
+      <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:10px">
+        <span lang="ar" style="font:700 30px/1.4 var(--ar)">${esc(word)}</span>
+        <span id="sf-gloss" class="muted" style="font:14px var(--en);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input id="sf-new-name" class="inp" placeholder="Or type a new folder name…" dir="auto">
+        <button type="button" class="btn primary" id="sf-new-go">Create</button>
+      </div>
+      <ul class="pick-folder-list">
+        ${rows.map(({ f, depth }) => {
+          const on = savedHere(f.id).length > 0;
+          return `<li><button type="button" class="pick-folder-btn" data-f="${esc(f.id)}" aria-pressed="${on}" style="padding-left:${14 + depth * 16}px">
+            <span dir="auto">${esc(f.name)}</span>
+            <span class="badge-pill ${on ? 'root' : ''}">${on ? 'Saved ✓' : cardsIn(f.id).length}</span>
+          </button></li>`;
+        }).join('')}
+      </ul>
+      <div style="margin-top:12px;text-align:right">
+        <button type="button" class="btn quiet sm" id="sf-full-form">Add notes / context before saving…</button>
+      </div>
+    `,
+    onMount(p, api) {
+      fieldsP.then(f => { const g = p.querySelector('#sf-gloss'); if (g) g.textContent = f.gloss || f.arGloss || ''; });
+      const commit = async (folderId, newName) => {
+        const fields = await fieldsP;
+        const id = addCard(fields, folderId, newName);
+        const card = liveCards().find(c => c.id === id);
+        api.close();
+        toast(`Saved to <strong>${esc(folderPath(cardFolder(card || { folder: folderId })))}</strong>`, {
+          label: 'Edit',
+          run: () => { if (card) cardSheet({ mode: 'edit', card }); },
+        });
+      };
+      p.querySelectorAll('[data-f]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const fid = btn.dataset.f;
+          const here = savedHere(fid);
+          if (!here.length) return commit(fid, null);
+          deleteCards(here.map(c => c.id));
+          api.close();
+          toast(`Removed from <strong>${esc(folderPath(fid))}</strong>`);
+        });
+      });
+      p.querySelector('#sf-new-go').addEventListener('click', () => {
+        const n = p.querySelector('#sf-new-name').value.trim();
+        if (!n) return p.querySelector('#sf-new-name').focus();
+        commit(null, n);
+      });
+      p.querySelector('#sf-full-form').addEventListener('click', async () => {
+        const fields = await fieldsP;
+        api.close();
+        cardSheet({ mode: 'save', fields });
+      });
+    },
+  });
+}
+
+function folderSelectOptions(selected, exclude = new Set(), includeTop = false) {
+  const rows = tree().filter(({ f }) => !exclude.has(f.id));
+  if (!rows.some(({ f }) => f.id === INBOX) && !exclude.has(INBOX)) rows.unshift({ f: VIRTUAL_INBOX, depth: 0 });
+  return (includeTop ? '<option value="">Top level</option>' : '') +
+    rows.map(({ f, depth }) => `<option value="${esc(f.id)}" ${f.id === selected ? 'selected' : ''}>${'— '.repeat(depth)}${esc(f.name)}</option>`).join('');
+}
+
+function cardSheet({ mode, fields = {}, card = null, folder = null }) {
+  const f = { word: '', gloss: '', arGloss: '', root: '', translit: '', context: '', highlight: '', note: '', tags: [], source: 'custom', ref: '', ...fields, ...(card || {}) };
+  const startFolder = card ? cardFolder(card) : folder || lastFolder();
+  const title = { save: 'Save card', add: 'Add card', edit: 'Edit card' }[mode];
+
+  openSheet({
+    title,
+    body: `<form id="cs-form">
+      <label class="lbl" for="cs-word">Arabic Word</label>
+      <input id="cs-word" class="inp ar-inp" lang="ar" dir="rtl" value="${esc(f.word)}" required ${mode === 'add' ? 'autofocus' : ''}>
+
+      <label class="lbl" for="cs-folder">Folder</label>
+      <select id="cs-folder" class="inp">${folderSelectOptions(startFolder)}</select>
+
+      <label class="lbl" for="cs-gloss">English Meaning</label>
+      <textarea id="cs-gloss" class="inp" rows="2" dir="auto" ${mode === 'save' ? 'autofocus' : ''}>${esc(f.gloss)}</textarea>
+
+      <label class="lbl" for="cs-context">
+        <span>Context sentence <small>(optional)</small></span>
+        <button type="button" class="btn quiet sm" id="cs-paste-ctx" style="min-height:24px;padding:0 8px">Paste clipboard</button>
+      </label>
+      <textarea id="cs-context" class="inp" rows="2" dir="auto" placeholder="Sentence or verse where you saw this word">${esc(f.context)}</textarea>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label class="lbl" for="cs-root">Root</label>
+          <input id="cs-root" class="inp ar-inp" lang="ar" dir="rtl" value="${esc(f.root)}" placeholder="ك ت ب">
+        </div>
+        <div>
+          <label class="lbl" for="cs-tr">Transliteration</label>
+          <input id="cs-tr" class="inp" value="${esc(f.translit)}">
+        </div>
+      </div>
+
+      <label class="lbl" for="cs-note">Personal Note <small>(optional)</small></label>
+      <input id="cs-note" class="inp" dir="auto" value="${esc(f.note)}">
+
+      <label class="lbl" for="cs-hl">Highlight phrase <small>(optional)</small></label>
+      <input id="cs-hl" class="inp ar-inp" lang="ar" dir="rtl" value="${esc(f.highlight)}">
+
+      <div class="toolbar-row" style="margin-top:18px;justify-content:space-between">
+        <div class="toolbar-row">
+          <button type="submit" class="btn primary">Save card</button>
+          <button type="button" class="btn quiet" id="cs-cancel">Cancel</button>
+        </div>
+        ${mode === 'edit' ? `<button type="button" class="btn danger-ghost sm" id="cs-del">Delete</button>` : ''}
+      </div>
+    </form>`,
+    onMount(p, api) {
+      p.querySelector('#cs-cancel').addEventListener('click', () => api.close());
+      p.querySelector('#cs-paste-ctx').addEventListener('click', async () => {
+        try {
+          const txt = await navigator.clipboard.readText();
+          if (txt) p.querySelector('#cs-context').value = txt.trim();
+        } catch { toast('Clipboard permission denied.'); }
+      });
+      p.querySelector('#cs-del')?.addEventListener('click', () => {
+        deleteCards([card.id]);
+        api.close();
+        toast('Card deleted');
+      });
+      p.querySelector('#cs-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const word = p.querySelector('#cs-word').value.trim();
+        if (!word) return p.querySelector('#cs-word').focus();
+        const vals = {
+          word,
+          gloss: p.querySelector('#cs-gloss').value,
+          context: p.querySelector('#cs-context').value,
+          root: p.querySelector('#cs-root').value,
+          translit: p.querySelector('#cs-tr').value,
+          note: p.querySelector('#cs-note').value,
+          highlight: p.querySelector('#cs-hl').value,
+          arGloss: f.arGloss,
+          tags: f.tags,
+          source: f.source,
+          ref: f.ref,
+        };
+        const folderId = p.querySelector('#cs-folder').value;
+        if (mode === 'edit') updateCard(card.id, { ...vals, folder: folderId });
+        else addCard(vals, folderId);
+        api.close();
+        toast(mode === 'edit' ? 'Card updated' : `Saved to <strong>${esc(folderPath(folderId))}</strong>`);
+      });
+    },
+  });
+}
+
+function newFolderSheet(parent) {
+  openSheet({
+    title: 'New folder',
+    body: `<form id="nf-form">
+      <label class="lbl" for="nf-name">Folder name</label>
+      <input id="nf-name" class="inp" dir="auto" maxlength="100" required autofocus placeholder="e.g. Al-Mutanabbi Poems">
+      <label class="lbl" for="nf-parent">Inside</label>
+      <select id="nf-parent" class="inp">${folderSelectOptions(parent || '', new Set(), true)}</select>
+      <div class="toolbar-row" style="margin-top:16px">
+        <button type="submit" class="btn primary">Create folder</button>
+        <button type="button" class="btn quiet" id="nf-x">Cancel</button>
+      </div>
+    </form>`,
+    onMount(p, api) {
+      p.querySelector('#nf-x').addEventListener('click', () => api.close());
+      p.querySelector('#nf-form').addEventListener('submit', e => {
+        e.preventDefault();
+        const name = p.querySelector('#nf-name').value.trim();
+        if (!name) return;
+        createFolder(name, p.querySelector('#nf-parent').value || null);
+        api.close();
+        toast(`Created folder <strong>${esc(name)}</strong>`);
+      });
+    },
+  });
+}
+
+function folderActionsSheet(id) {
+  const f = folderById(id);
+  if (!f) return;
+  const paused = !!f.paused;
+  openSheet({
+    title: f.name,
+    body: `
+      <label class="lbl" for="fa-name">Rename folder</label>
+      <div style="display:flex;gap:8px">
+        <input id="fa-name" class="inp" value="${esc(f.name)}" dir="auto">
+        <button type="button" class="btn" id="fa-ren">Save</button>
+      </div>
+      <div class="toolbar-row" style="margin-top:16px">
+        <button type="button" class="btn" id="fa-sub">+ Sub-folder</button>
+        <button type="button" class="btn" id="fa-pause">${paused ? 'Resume reviews' : 'Pause reviews'}</button>
+        ${id !== INBOX ? `<button type="button" class="btn danger-ghost" id="fa-del">Delete folder</button>` : ''}
+      </div>
+      <div id="fa-del-box" hidden style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border)">
+        <p style="margin:0 0 10px;font:14px var(--ui)">What should happen to cards inside “${esc(f.name)}”?</p>
+        <div class="toolbar-row">
+          <button type="button" class="btn sm" id="fa-del-inbox">Move cards to Inbox</button>
+          <button type="button" class="btn sm danger" id="fa-del-all">Delete cards too</button>
+        </div>
+      </div>
+    `,
+    onMount(p, api) {
+      p.querySelector('#fa-ren').addEventListener('click', () => {
+        const name = p.querySelector('#fa-name').value.trim();
+        if (!name) return;
+        renameFolder(id, name);
+        api.close();
+        toast('Folder renamed');
+      });
+      p.querySelector('#fa-sub').addEventListener('click', () => { api.close(); newFolderSheet(id); });
+      p.querySelector('#fa-pause').addEventListener('click', () => {
+        setFolderPaused(id, !paused);
+        api.close();
+        toast(!paused ? `Paused ${esc(f.name)}` : `Resumed ${esc(f.name)}`);
+      });
+      p.querySelector('#fa-del')?.addEventListener('click', () => { p.querySelector('#fa-del-box').hidden = false; });
+      p.querySelector('#fa-del-inbox')?.addEventListener('click', () => { deleteFolder(id, 'inbox'); api.close(); go('vocab'); });
+      p.querySelector('#fa-del-all')?.addEventListener('click', () => { deleteFolder(id, 'delete'); api.close(); go('vocab'); });
+    },
+  });
+}
+
+function moveCardsSheet(ids, from) {
+  openSheet({
+    title: `Move ${plural(ids.length, 'card')}`,
+    body: `<label class="lbl" for="mc-f">Destination folder</label>
+      <select id="mc-f" class="inp">${folderSelectOptions(from === INBOX ? '' : INBOX)}</select>
+      <div class="toolbar-row" style="margin-top:16px">
+        <button type="button" class="btn primary" id="mc-go">Move</button>
+      </div>`,
+    onMount(p, api) {
+      p.querySelector('#mc-go').addEventListener('click', () => {
+        moveCards(ids, p.querySelector('#mc-f').value);
+        vocabUi.pickedCards.clear();
+        vocabUi.selectCards = false;
+        api.close();
+        toast(`Moved ${plural(ids.length, 'card')}`);
+      });
+    },
+  });
+}
+
+function downloadBlob(name, mime, text) {
+  const blob = new Blob([text], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function exportSheet(cards, baseName) {
+  const safe = baseName.replace(/[^\w\u0600-\u06FF-]+/g, '-').toLowerCase() || 'qamus';
+  openSheet({
+    title: `Export ${plural(cards.length, 'card')}`,
+    body: `<p class="muted" style="margin:0 0 14px;font:14px var(--ui)">Download your vocabulary for Anki (CSV) or full backup (JSON).</p>
+      <div class="toolbar-row">
+        <button type="button" class="btn primary" id="ex-csv">Download CSV (Anki)</button>
+        <button type="button" class="btn" id="ex-json">Download JSON</button>
+      </div>`,
+    onMount(p, api) {
+      p.querySelector('#ex-csv').addEventListener('click', () => {
+        const cell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const rows = [CSV_FIELDS.join(','), ...cards.map(c => CSV_FIELDS.map(k => cell(k === 'tags' ? (c.tags || []).join(' ') : c[k])).join(','))];
+        downloadBlob(`${safe}.csv`, 'text/csv;charset=utf-8', '\uFEFF' + rows.join('\n'));
+        api.close();
+      });
+      p.querySelector('#ex-json').addEventListener('click', () => {
+        downloadBlob(`${safe}.json`, 'application/json;charset=utf-8', JSON.stringify(cards, null, 2));
+        api.close();
+      });
+    },
+  });
+}
+
+function importSheet(folderId) {
+  openSheet({
+    title: 'Import cards',
+    body: `<p class="muted" style="margin:0 0 12px;font:14px var(--ui)">Import a JSON array of cards or a CSV/TSV file with <code>word</code> and <code>gloss</code> columns.</p>
+      <input type="file" id="imp-file" accept=".json,.csv,.tsv,.txt" class="inp">
+      <p id="imp-status" class="muted" style="font:13.5px var(--ui);margin-top:10px"></p>
+      <div class="toolbar-row" style="margin-top:14px">
+        <button type="button" class="btn primary" id="imp-go" disabled>Import</button>
+      </div>`,
+    onMount(p, api) {
+      let parsed = [];
+      p.querySelector('#imp-file').addEventListener('change', async e => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const txt = await file.text();
+        try {
+          if (file.name.endsWith('.json')) {
+            const j = JSON.parse(txt);
+            parsed = (Array.isArray(j) ? j : j.cards || []).filter(x => x && x.word);
+          } else {
+            const lines = txt.split(/\r?\n/).filter(Boolean);
+            const sep = lines[0].includes('\t') ? '\t' : ',';
+            const rows = lines.map(l => l.split(sep).map(c => c.replace(/^"|"$/g, '').replace(/""/g, '"').trim()));
+            const hasHeader = /^word$/i.test(rows[0][0]);
+            const body = hasHeader ? rows.slice(1) : rows;
+            parsed = body.filter(r => r[0]).map(r => ({ word: r[0], gloss: r[1] || '', arGloss: r[2] || '', root: r[3] || '', translit: r[4] || '', context: r[5] || '', note: r[6] || '' }));
+          }
+          p.querySelector('#imp-status').textContent = `Ready to import ${plural(parsed.length, 'card')}.`;
+          p.querySelector('#imp-go').disabled = !parsed.length;
+        } catch {
+          p.querySelector('#imp-status').textContent = 'Could not parse that file.';
+        }
+      });
+      p.querySelector('#imp-go').addEventListener('click', () => {
+        parsed.forEach(item => addCard(item, folderId));
+        api.close();
+        toast(`Imported ${plural(parsed.length, 'card')}`);
+      });
+    },
+  });
+}
+
 const NAME_WORDS = ['qalam', 'noor', 'sahab', 'kitab', 'bayt', 'qamar', 'shams', 'najm', 'bahr', 'jabal', 'ward', 'nakhl',
-  'reeh', 'matar', 'nahr', 'sabr', 'fajr', 'layl', 'hilal', 'dalil', 'qafla', 'rihla', 'warqa', 'hikma', 'midad', 'safar',
-  'zaytun', 'rumman', 'tamr', 'asal', 'misk', 'anbar', 'lulu', 'marjan', 'ghazal', 'saqr', 'hudhud', 'bulbul', 'nakhla', 'sidra',
-  'wadi', 'waha', 'sahil', 'bustan', 'manar', 'qubba', 'fanar', 'diwan', 'sirr', 'nasim', 'dima', 'thalj', 'barq', 'ufuq'];
+  'reeh', 'matar', 'nahr', 'sabr', 'fajr', 'layl', 'hilal', 'dalil', 'rihla', 'hikma', 'midad', 'safar', 'zaytun', 'diwan', 'manar', 'ufuq'];
 function randName() {
   const a = new Uint32Array(2);
   crypto.getRandomValues(a);
   return NAME_WORDS[a[0] % NAME_WORDS.length] + '-' + (1000 + (a[1] % 9000));
 }
-// A name anyone could type by chance (no digits, or short) gets a gentle nudge, never a block.
 const easyName = n => n.length < 8 || !/\d/.test(n) || /^(test|admin|user|qamus|hello|abc|guest)/.test(n);
 const statusLabel = st => ({
   synced: st.lastSync ? `Synced ${relTime(st.lastSync)}` : 'Synced',
@@ -1412,54 +2508,39 @@ const statusLabel = st => ({
   local: 'Not syncing',
 }[st.status] || st.status);
 
-function renderAcct(st) {
-  if (!acctEl) return;
-  acctEl.querySelector('.dot').className = 'dot ' + (st.user ? st.status : 'local');
-  acctEl.querySelector('.acct-name').textContent = st.user || 'Sign in';
-  const label = st.user ? `Account ${st.user} · ${statusLabel(st)}` : 'Sign in to sync';
-  acctEl.setAttribute('aria-label', label);
-  acctEl.title = label;
-  acctEl.dataset.status = st.user ? st.status : 'local';
-  renderStat(st);
-}
-
 function loginSheet({ onClose } = {}) {
-  sheet({
+  openSheet({
     onClose,
     title: 'Choose a username to sync across devices',
-    body: `<p class="muted sheet-note">Your username is your key: there's no password, so anyone who types it sees your words. Keep the one we made you, or make your own with a number in it, and use it on your other devices.</p>
+    body: `<p class="muted" style="margin:0 0 12px;font:14px/1.55 var(--ui)">Your username is your key: there’s no password, so anyone who types it sees your words. Keep the suggestion below or pick your own with digits, and use it on your other devices.</p>
       <label class="lbl" for="lg-name">Username</label>
-      <div class="field-row">
-        <input id="lg-name" class="inp key-inp" value="${randName()}" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" enterkeyhint="go" autofocus>
+      <div style="display:flex;gap:8px">
+        <input id="lg-name" class="inp" value="${randName()}" style="font-family:var(--mono);font-weight:600" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="40" enterkeyhint="go" autofocus>
         <button type="button" class="btn" id="lg-regen" aria-label="Suggest another username" title="Suggest another">↻</button>
         <button type="button" class="btn" id="lg-copy" aria-label="Copy username" title="Copy">Copy</button>
       </div>
       <p class="key-hint" id="lg-hint" aria-live="polite"></p>
       <p class="form-msg" id="lg-msg" role="status" aria-live="polite"></p>
-      <div class="actions" id="lg-actions"></div>`,
+      <div class="toolbar-row" id="lg-actions" style="margin-top:14px"></div>`,
     onMount(p, api) {
-      const inp = p.querySelector('#lg-name'), msg = p.querySelector('#lg-msg'), acts = p.querySelector('#lg-actions');
+      const inp = p.querySelector('#lg-name'), msg = p.querySelector('#lg-msg'), acts = p.querySelector('#lg-actions'), hint = p.querySelector('#lg-hint');
       let checked = null, busy = false;
       const say = (html, err) => { msg.innerHTML = html; msg.classList.toggle('err', !!err); };
       const buttons = list => {
         acts.innerHTML = list.map(([id, label, cls]) => `<button type="button" class="btn ${cls || ''}" id="${id}">${label}</button>`).join('');
       };
-      const idle = () => {
-        checked = null;
-        buttons([['lg-go', 'Continue', 'primary'], ['lg-skip', 'Use without syncing', 'quiet']]);
-      };
+      const idle = () => { checked = null; buttons([['lg-go', 'Continue', 'primary'], ['lg-skip', 'Use without syncing', 'quiet']]); };
       const confirmState = (name, kind) => {
         checked = name;
         say(kind === 'existing'
-          ? `Welcome back — data on this device will be merged into <b>${esc(name)}</b>.`
-          : `New account — nothing is saved under <b>${esc(name)}</b> yet.`);
-        p.dataset.check = kind;
+          ? `Welcome back — data on this device will be merged into <strong>${esc(name)}</strong>.`
+          : `New account — nothing is saved under <strong>${esc(name)}</strong> yet.`);
         buttons([['lg-confirm', kind === 'existing' ? 'Sign in' : 'Create account', 'primary'], ['lg-change', 'Change name', 'quiet']]);
-        p.querySelector('#lg-confirm').focus();
+        p.querySelector('#lg-confirm')?.focus();
       };
-      const go = async () => {
+      const checkName = async () => {
         if (busy) return;
-        const name = QamusMerge.normUsername(inp.value);
+        const name = QM.normUsername(inp.value);
         if (!name) { say('Use 3–32 characters: letters a–z, digits, “-” or “_”.', true); inp.focus(); return; }
         inp.value = name;
         busy = true; say('Checking…');
@@ -1471,27 +2552,23 @@ function loginSheet({ onClose } = {}) {
         if (kind === 'invalid') say('Use 3–32 characters: letters a–z, digits, “-” or “_”.', true);
         else { say('Can’t reach the sync server. Check your connection and try again.', true); p.querySelector('#lg-go').textContent = 'Retry'; }
       };
-      acts.addEventListener('click', e => {
-        const id = e.target.closest('button')?.id;
-        if (id === 'lg-go') go();
-        else if (id === 'lg-skip') { lsSet('qamus.syncSkipped', '1'); api.close(); }
-        else if (id === 'lg-change') { idle(); say(''); delete p.dataset.check; inp.focus(); inp.select(); }
-        else if (id === 'lg-confirm' && checked) { Sync.signIn(checked); api.close(); }
-      });
-      const hint = p.querySelector('#lg-hint');
       const showHint = () => {
-        const n = QamusMerge.normUsername(inp.value);
+        const n = QM.normUsername(inp.value);
         hint.className = 'key-hint' + (n && easyName(n) ? ' weak' : '');
         hint.textContent = !n ? '' : easyName(n) ? 'Easy to guess. Add a few digits, like ' + randName() + '.' : 'Looks unique.';
       };
-      inp.addEventListener('input', () => { showHint(); if (checked) { idle(); say(''); delete p.dataset.check; } });
-      p.querySelector('#lg-copy').addEventListener('click', async e => {
-        try { await navigator.clipboard.writeText(inp.value.trim()); e.target.textContent = 'Copied'; setTimeout(() => { e.target.textContent = 'Copy'; }, 1500); }
-        catch { inp.select(); }
+      acts.addEventListener('click', e => {
+        const id = e.target.closest('button')?.id;
+        if (id === 'lg-go') checkName();
+        else if (id === 'lg-skip') { lsSet('qamus.syncSkipped', '1'); api.close(); }
+        else if (id === 'lg-change') { idle(); say(''); inp.focus(); inp.select(); }
+        else if (id === 'lg-confirm' && checked) { Sync.signIn(checked); api.close(); toast(`Signed in as <strong>${esc(checked)}</strong>`); }
       });
-      showHint();
-      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checked ? p.querySelector('#lg-confirm')?.click() : go(); } });
+      inp.addEventListener('input', () => { showHint(); if (checked) { idle(); say(''); } });
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); checked ? p.querySelector('#lg-confirm')?.click() : checkName(); } });
       p.querySelector('#lg-regen').addEventListener('click', () => { inp.value = randName(); inp.dispatchEvent(new Event('input')); inp.focus(); });
+      p.querySelector('#lg-copy').addEventListener('click', () => copyText(inp.value.trim(), 'Username copied'));
+      showHint();
       idle();
       inp.select();
     },
@@ -1499,27 +2576,37 @@ function loginSheet({ onClose } = {}) {
 }
 
 function accountSheet({ onClose } = {}) {
-  const st = Sync.state;
+  const st = Sync?.state || { user: null, status: 'local' };
+  if (!SYNC_URL || !Sync) {
+    openSheet({
+      onClose,
+      title: 'Local Storage',
+      body: `<p style="font:14.5px/1.6 var(--ui)">Sync is disabled in this environment. Your folders, cards, and history are stored locally in IndexedDB.</p>`,
+    });
+    return;
+  }
   if (!st.user) return loginSheet({ onClose });
+
   let off = null;
-  sheet({
-    title: 'Account',
-    body: `<p class="acct-user"><span class="muted">Signed in as</span> <code class="key">${esc(st.user)}</code>
-        <button type="button" class="btn quiet" id="ac-copy" aria-label="Copy username">Copy</button></p>
-      <p class="muted sheet-note">Type this on your other devices to get the same words. Keep it somewhere safe.</p>
+  openSheet({
+    title: 'Sync Account',
+    body: `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span class="muted" style="font:14px var(--ui)">Signed in as</span>
+        <code style="padding:4px 10px;border-radius:6px;background:var(--surface-2);border:1px solid var(--border);font:600 15px var(--mono)">${esc(st.user)}</code>
+        <button type="button" class="btn quiet sm" id="ac-copy">Copy</button>
+      </div>
+      <p class="muted" style="font:13.5px/1.5 var(--ui);margin:8px 0 0">Use this same username on your iPad or phone to keep your words synced.</p>
       <p class="form-msg" id="ac-status" role="status" aria-live="polite"></p>
-      <div class="actions" id="ac-main">
+      <div class="toolbar-row" id="ac-main" style="margin-top:16px">
         <button type="button" class="btn primary" id="ac-sync">Sync now</button>
         <button type="button" class="btn" id="ac-hist">Search history</button>
-        <button type="button" class="btn quiet" id="ac-out">Sign out</button>
+        <button type="button" class="btn danger-ghost" id="ac-out">Sign out</button>
       </div>
-      <div class="confirm" id="ac-confirm" hidden>
-        <p id="ac-q"></p>
-        <div class="actions col">
-          <button type="button" class="btn danger" id="ac-clear">Sign out and remove data from this device</button>
-          <button type="button" class="btn" id="ac-keep">Sign out, keep data here</button>
-          <button type="button" class="btn quiet" id="ac-cancel">Cancel</button>
-        </div>
+      <div class="confirm-box" id="ac-confirm" hidden>
+        <p id="ac-q" style="margin:0;font:14px/1.5 var(--ui)"></p>
+        <button type="button" class="btn danger" id="ac-clear">Sign out and remove data from this device</button>
+        <button type="button" class="btn" id="ac-keep">Sign out, keep data here</button>
+        <button type="button" class="btn quiet" id="ac-cancel">Cancel</button>
       </div>`,
     onMount(p, api) {
       const stEl = p.querySelector('#ac-status'), conf = p.querySelector('#ac-confirm'), q = p.querySelector('#ac-q');
@@ -1530,153 +2617,332 @@ function accountSheet({ onClose } = {}) {
       };
       show(st);
       off = Sync.on('status', show);
-      const ask = (text, clearLabel) => {
-        q.innerHTML = text;
+      let force = false;
+      const ask = (html, clearLabel) => {
+        q.innerHTML = html;
         p.querySelector('#ac-clear').textContent = clearLabel;
         conf.hidden = false;
         p.querySelector('#ac-main').hidden = true;
-        p.querySelector('#ac-cancel').focus();
       };
-      let force = false;
-      const out = async keepData => {
+      const doOut = async keepData => {
         conf.querySelectorAll('button').forEach(b => { b.disabled = true; });
         q.textContent = 'Signing out…';
         const r = await Sync.signOut({ keepData, force });
         conf.querySelectorAll('button').forEach(b => { b.disabled = false; });
         if (!r.done) {
           force = true;
-          return ask('<b>Your latest changes couldn’t be synced.</b> Removing the data now will lose them. Keep it on this device instead, or remove it anyway?', 'Remove anyway');
+          return ask('<strong>Your latest changes couldn’t be synced.</strong> Removing data now will lose them. Keep it on this device instead, or remove it anyway?', 'Remove anyway');
         }
-        api.close();   // the Store 'change' from clearing data redraws the view
+        api.close();
+        toast(keepData ? 'Signed out (local data kept)' : 'Signed out');
       };
       p.addEventListener('click', e => {
         const id = e.target.closest('button')?.id;
         if (id === 'ac-sync') Sync.syncNow();
-        else if (id === 'ac-copy') {
-          const b = e.target.closest('button');
-          navigator.clipboard?.writeText(st.user).then(() => { b.textContent = 'Copied'; setTimeout(() => { b.textContent = 'Copy'; }, 1500); }, () => {});
-        }
-        else if (id === 'ac-hist') { go('history'); api.close(); }
+        else if (id === 'ac-copy') copyText(st.user, 'Username copied');
+        else if (id === 'ac-hist') { api.close(); go('history'); }
         else if (id === 'ac-out') {
           const s = Sync.state;
-          ask((s.dirty ? '<b>Some changes on this device haven’t synced yet</b>; they’ll be sent first. ' : '') +
+          ask((s.dirty ? '<strong>Some changes haven’t synced yet</strong>; they’ll be sent first. ' : '') +
             'Remove your words and history from this device? They stay in your account.', 'Sign out and remove data from this device');
         }
-        else if (id === 'ac-cancel') { conf.hidden = true; force = false; p.querySelector('#ac-main').hidden = false; p.querySelector('#ac-out').focus(); }
-        else if (id === 'ac-clear') out(false);
-        else if (id === 'ac-keep') out(true);
+        else if (id === 'ac-cancel') { conf.hidden = true; force = false; p.querySelector('#ac-main').hidden = false; }
+        else if (id === 'ac-clear') doOut(false);
+        else if (id === 'ac-keep') doOut(true);
       });
     },
     onClose() { off?.(); onClose?.(); },
   });
 }
 
-function initSync() {
-  if (!Store || !Sync) return;   // sync.js not loaded (e.g. a single-file preview build)
-  Store.init().then(() => {
-    migrateHist();
-    const refresh = () => {
-      applyTextSizes();
-      if (view === 'home') home();
-      else if (view === 'history') historyView();
-      else if (view === 'settings') settingsView();
-      else if (view === 'vocab' || view === 'folder') route();
-      // 'study' renders itself; a store change must not flip the card back mid-session
-      else if (view === 'result' && hasVocab()) markSaved(main);
-      updateTabBadge();
-      renderSide();
-    };
-    Store.on('change', refresh);
-    if (sideEl) sideEl.hidden = false;
-    const statEl = $('#statusbar'); if (statEl) statEl.hidden = false;
-    renderStat(null);
-    refresh();
-    // First visit: the guided demo, which offers sign-in at the end (instead of the sign-in sheet straight away).
-    // Decided once every script has run: saved data can be ready before tour.js has even downloaded.
-    const offerSignIn = () => { if (SYNC_URL && !Sync.state.user && !lsGet('qamus.syncSkipped')) loginSheet(); };
-    const firstRun = () => {
-      if (typeof startTour === 'function' && shouldTour()) startTour({ onDone: ({ signIn }) => { if (signIn) offerSignIn(); } });
-      else offerSignIn();
-    };
-    const afterScripts = fn => (document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, { once: true }) : fn());
-    if (!SYNC_URL) return afterScripts(firstRun);
-    // re-greet on home when the signed-in user changes (sign-in, sign-out)
-    const regreet = st => { if (view === 'home' && (st.user || '') !== greetedUser) home(); };
-    Sync.on('status', st => { renderAcct(st); regreet(st); });
+function updateSyncUi(st) {
+  const status = st?.user ? st.status : 'local';
+  for (const id of ['rail-sync-dot', 'mobile-sync-dot']) {
+    const d = document.getElementById(id);
+    if (d) d.className = 'sync-dot ' + status;
+  }
+  const name = $('#rail-acct-name');
+  if (name) name.textContent = st?.user ? `${st.user} · ${st.status}` : (SYNC_URL ? 'Sign in to sync' : 'Local only');
+}
+
+// ==========================================================================
+// 9. AUTOCOMPLETE & GLOBAL EVENTS
+// ==========================================================================
+let sugTimer = 0, blurTimer = 0;
+
+function renderSuggest() {
+  const q = qEl.value;
+  clearBtn.hidden = !q;
+  suggestItems = suggestions(q);
+  suggestIdx = -1;
+  if (!suggestItems.length || document.activeElement !== qEl) {
+    sugEl.hidden = true;
+    return;
+  }
+  sugEl.innerHTML = suggestItems.map((r, i) => {
+    const isRoot = r[2] === 'h' && state.HW && state.byId.get(+r[3])?.[3];
+    const badge = r[2] === 'p' ? `<span class="badge-pill gold">particle</span>`
+      : r[2] === 'f' ? `<span class="badge-pill">Form ${state.HW.forms[+r[3]][1]}</span>`
+      : isRoot ? `<span class="badge-pill root">root</span>`
+      : r[2] === 'w' ? `<span class="badge-pill">wikt</span>`
+      : r[2] === 'l' ? `<span class="badge-pill gold">lane</span>`
+      : r[2] === 'b' ? `<span class="badge-pill">lex</span>` : '';
+    const gl = glossFor(r, () => { if (!sugEl.hidden) renderSuggest(); });
+    return `<li role="option" data-si="${i}"><span class="sw" lang="ar">${esc(r[1])}</span><span class="sg">${esc(gl)}</span>${badge}</li>`;
+  }).join('');
+  sugEl.hidden = false;
+}
+
+function pickSuggestion(r) {
+  sugEl.hidden = true;
+  qEl.blur();
+  if (r[2] === 'h') go({ e: r[3], q: r[1] });
+  else if (r[2] === 'f') go({ f: r[3], q: r[1] });
+  else if (r[2] === 'w') go({ w: r[3], q: r[1] });
+  else go({ q: r[1] });
+}
+
+qEl.addEventListener('input', () => { clearTimeout(blurTimer); clearTimeout(sugTimer); sugTimer = setTimeout(renderSuggest, 50); });
+qEl.addEventListener('focus', () => { clearTimeout(blurTimer); renderSuggest(); });
+qEl.addEventListener('blur', () => { clearTimeout(blurTimer); blurTimer = setTimeout(() => { sugEl.hidden = true; }, 140); });
+qEl.addEventListener('keydown', e => {
+  const lis = sugEl.querySelectorAll('li');
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!lis.length) return;
+    e.preventDefault();
+    suggestIdx = (suggestIdx + (e.key === 'ArrowDown' ? 1 : -1) + lis.length) % lis.length;
+    lis.forEach((li, i) => li.classList.toggle('on', i === suggestIdx));
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (suggestIdx >= 0 && suggestItems[suggestIdx]) pickSuggestion(suggestItems[suggestIdx]);
+    else {
+      sugEl.hidden = true;
+      qEl.blur();
+      const val = qEl.value.trim();
+      go(val ? { q: val } : '');
+    }
+  } else if (e.key === 'Escape') {
+    sugEl.hidden = true;
+    qEl.blur();
+  }
+});
+sugEl.addEventListener('pointerdown', e => {
+  const li = e.target.closest('li');
+  if (li) { e.preventDefault(); pickSuggestion(suggestItems[+li.dataset.si]); }
+});
+clearBtn.addEventListener('click', () => { qEl.value = ''; clearBtn.hidden = true; qEl.focus(); renderSuggest(); });
+
+// Global delegated clicks
+document.addEventListener('click', e => {
+  const navTab = e.target.closest('[data-nav-tab]');
+  if (navTab) {
+    const t = navTab.dataset.navTab;
+    if (t === 'search') {
+      if (curView === 'home') { qEl.focus(); qEl.select(); }
+      else go('');
+    } else go(t);
+    return;
+  }
+  const navHome = e.target.closest('[data-nav]');
+  if (navHome) { e.preventDefault(); go(navHome.dataset.nav); return; }
+
+  const goBtn = e.target.closest('[data-go]');
+  if (goBtn) { go(goBtn.dataset.go); return; }
+
+  const copyBtn = e.target.closest('[data-copy]');
+  if (copyBtn) { e.stopPropagation(); copyText(copyBtn.dataset.copy, 'Word copied'); return; }
+
+  const bm = e.target.closest('.bm-btn[data-save]');
+  if (bm) {
+    e.stopPropagation();
+    try { saveToFolderSheet(JSON.parse(bm.dataset.save), bm.dataset.word); } catch {}
+    return;
+  }
+
+  if (e.target.closest('#home-focus-search')) { qEl.focus(); qEl.select(); return; }
+
+  const pickEl = e.target.closest('[data-pick]');
+  if (pickEl) { pickSuggestion(JSON.parse(pickEl.dataset.pick)); return; }
+
+  const eEl = e.target.closest('[data-e]');
+  if (eEl) { go({ e: eEl.dataset.e, q: state.byId.get(+eEl.dataset.e)?.[1] || '' }); return; }
+
+  const qLink = e.target.closest('[data-q]');
+  if (qLink) {
+    const val = qLink.dataset.q;
+    qEl.value = val;
+    go({ q: val });
+  }
+});
+
+// Lazy-load Lane / Arabic details when opened
+main.addEventListener('toggle', e => {
+  if (!e.target.open) return;
+  if (e.target.matches('details.lane-details')) fillLaneCard(e.target);
+  else if (e.target.matches('details.ar-details')) fillArCard(e.target);
+}, true);
+
+// Theme cycle & Account buttons
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(getTheme()) + 1) % THEMES.length];
+  applyTheme(next);
+  toast(`Theme: ${THEME_LABELS[next]}`);
+  if (curView === 'settings') renderSettingsView();
+}
+$('#theme-cycle')?.addEventListener('click', cycleTheme);
+$('#rail-acct')?.addEventListener('click', accountSheet);
+$('#mobile-acct')?.addEventListener('click', accountSheet);
+
+// Keep search placeholder clean on narrow phone viewports
+const compactMq = matchMedia('(max-width: 540px)');
+const syncPlaceholder = () => {
+  qEl.placeholder = compactMq.matches ? 'Search Qamus…' : 'Search Arabic, root (ك ت ب), or English';
+};
+syncPlaceholder();
+compactMq.addEventListener('change', syncPlaceholder);
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (openSheetApi || e.defaultPrevented) return;
+  const typing = e.target.matches?.('input, textarea, select, [contenteditable="true"]');
+
+  if ((e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
+    e.preventDefault();
+    qEl.focus();
+    qEl.select();
+    return;
+  }
+
+  if (curView === 'study' && study && !typing) {
+    if (e.key === ' ') { e.preventDefault(); flipStudyCard(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); moveStudy(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); moveStudy(-1); }
+    else if (e.key.toLowerCase() === 'z') { e.preventDefault(); undoStudyGrade(); }
+    else if (study.mode === 'review' && /^[1-4]$/.test(e.key)) gradeStudyCard(+e.key - 1);
+    else if (study.mode === 'browse' && e.key === '1') markStudyCard(MARK_AGAIN);
+    else if (study.mode === 'browse' && e.key === '2') markStudyCard(MARK_GOT);
+    else if (e.key === 'Escape') go(study.ids.length > 1 ? 'vocab' : 'folder=' + study.ids[0]);
+    return;
+  }
+
+  if (e.key === 'Escape' && !typing) {
+    if (curView === 'folder') go('vocab');
+    else if (curView === 'settings') history.back();
+  }
+});
+
+// Touch swipe left/right on flashcard stage in Browse mode
+let stSwipe = null;
+main.addEventListener('pointerdown', e => {
+  if (curView !== 'study' || !e.target.closest('.fc-stage')) return;
+  stSwipe = { x: e.clientX, y: e.clientY, id: e.pointerId };
+});
+main.addEventListener('pointerup', e => {
+  if (!stSwipe || e.pointerId !== stSwipe.id) return;
+  const dx = e.clientX - stSwipe.x, dy = e.clientY - stSwipe.y;
+  stSwipe = null;
+  if (!study || study.mode !== 'browse' || Math.abs(dx) <= 60 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+  moveStudy(dx < 0 ? 1 : -1);
+});
+main.addEventListener('pointercancel', () => { stSwipe = null; });
+
+window.addEventListener('hashchange', route);
+
+// One-time migration of legacy localStorage `hist` into synced Store.doc.history
+function migrateLegacyHist() {
+  let raw = null;
+  try { raw = localStorage.getItem('hist'); } catch { return; }
+  if (raw === null) return;
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) {
+      const have = new Set(Store.doc.history.map(h => h.q));
+      const add = [...new Set(arr.filter(x => typeof x === 'string').map(cleanQ))].filter(q => q && !have.has(q));
+      if (add.length) {
+        const now = Date.now();
+        Store.mutate(d => { d.history = [...d.history, ...add.map((q, i) => ({ q, t: now - (i + 1) * 1000 }))]; });
+      }
+    }
+    if (Store.persistent) localStorage.removeItem('hist');
+  } catch {}
+}
+
+// Service worker registration + live update banner
+const hadSW = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller;
+function showUpdateBanner() {
+  if (document.getElementById('update-banner')) return;
+  const b = document.createElement('div');
+  b.id = 'update-banner';
+  b.className = 'update-banner';
+  b.setAttribute('role', 'status');
+  b.innerHTML = `<span>Qamus was updated.</span>
+    <button type="button" class="btn primary sm" id="ub-reload">Reload</button>
+    <button type="button" class="btn quiet sm" id="ub-x" aria-label="Dismiss">×</button>`;
+  b.querySelector('#ub-reload').addEventListener('click', () => location.reload());
+  b.querySelector('#ub-x').addEventListener('click', () => b.remove());
+  document.body.appendChild(b);
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadSW) showUpdateBanner(); });
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+// ==========================================================================
+// 10. BOOTSTRAP
+// ==========================================================================
+onEngineUpdate(stage => {
+  document.documentElement.dataset.engineStage = stage;
+  if (stage === 'index') {
+    loadPill.hidden = false;
+    loadPill.textContent = 'Indexing…';
+  } else if (stage === 'hw') {
+    loadPill.textContent = 'Morphology…';
+    if (curView === 'result' || curView === 'boot') route();
+  } else if (stage === 'morph') {
+    loadPill.textContent = 'Wiktionary…';
+    if (curView === 'result' && window.scrollY < 100) route();
+  } else if (stage === 'full') {
+    loadPill.hidden = true;
+    if (curView === 'result' && main.textContent.includes('No exact match')) route();
+  }
+});
+
+async function boot() {
+  await Store.init();
+  migrateLegacyHist();
+  applyTextSizes();
+  Store.on('change', () => {
+    applyTextSizes();
+    renderRail();
+    updateNavChrome(curView === 'folder' || curView === 'study' ? 'vocab' : curView === 'home' || curView === 'result' ? 'search' : curView);
+    if (curView === 'home') renderHomeView();
+    else if (curView === 'vocab') renderVocabView();
+    else if (curView === 'folder') renderFolderView(vocabUi.folderId);
+    else if (curView === 'history') renderHistoryView();
+    else if (curView === 'settings') renderSettingsView();
+    else if (curView === 'result') syncBookmarkStates(main);
+  });
+
+  if (SYNC_URL && Sync) {
+    Sync.on('status', st => {
+      updateSyncUi(st);
+      if (curView === 'home') renderHomeView();
+    });
     Sync.init({ url: SYNC_URL, quietDelay: window.QAMUS_TEST_QUIET_DELAY });
-    renderAcct(Sync.state);
-    regreet(Sync.state);
-    acctEl.hidden = false;
-    acctEl.addEventListener('click', () => go('account'));
-    afterScripts(firstRun);
+    updateSyncUi(Sync.state);
+  } else {
+    updateSyncUi(null);
+  }
+
+  route();
+
+  initEngine().catch(err => {
+    loadPill.hidden = true;
+    main.innerHTML = `<div class="card" style="padding:24px">
+      <h2 style="margin:0 0 8px">Could not load dictionary data</h2>
+      <p class="muted" style="margin:0;font:14px var(--ui)">${esc(err.message)}. Serve the project root with <code>node tests/serve.js 8000</code>.</p>
+    </div>`;
   });
 }
 
-// ---------- events ----------
-let t, blurT;
-qEl.addEventListener('input', () => { clearTimeout(blurT); clearTimeout(t); t = setTimeout(renderSuggest, 60); });
-qEl.addEventListener('focus', () => { clearTimeout(blurT); renderSuggest(); });   // a pending blur-hide must not hide a fresh list
-qEl.addEventListener('blur', () => { clearTimeout(blurT); blurT = setTimeout(() => { sug.hidden = true; }, 150); });
-qEl.addEventListener('keydown', e => {
-  const lis = sug.querySelectorAll('li');
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    if (!lis.length) return; e.preventDefault();
-    sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + lis.length) % lis.length;
-    lis.forEach((li, i) => li.classList.toggle('on', i === sel));
-  } else if (e.key === 'Enter') {
-    e.preventDefault();
-    if (sel >= 0 && cur[sel]) pick(cur[sel]);
-    else { sug.hidden = true; qEl.blur(); go({ q: qEl.value.trim() }); }
-  } else if (e.key === 'Escape') sug.hidden = true;
-});
-sug.addEventListener('pointerdown', e => { const li = e.target.closest('li'); if (li) { e.preventDefault(); pick(cur[+li.dataset.i]); } });
-$('#clear').addEventListener('click', () => { qEl.value = ''; $('#clear').hidden = true; qEl.focus(); renderSuggest(); });
-main.addEventListener('click', e => {
-  const el = e.target.closest('[data-q],[data-e],[data-pick]'); if (!el) return;
-  if (el.dataset.pick) return pick(JSON.parse(el.dataset.pick));
-  if (el.dataset.e) return go({ e: el.dataset.e, q: byId.get(+el.dataset.e)?.[1] || '' });
-  qEl.value = el.dataset.q; go({ q: el.dataset.q });
-});
-
-main.addEventListener('toggle', e => {
-  if (!e.target.open) return;
-  if (e.target.matches?.('details.lane')) fillLane(e.target);
-  else if (e.target.matches?.('details.ard')) fillAr(e.target);
-}, true);
-document.getElementById('back')?.addEventListener('click', back);
-
-// Hardware keyboard: "/" or ⌘K/Ctrl+K focuses search; Esc steps out of study and folders.
-// (Sheets handle their own Esc in the capture phase and call preventDefault, so they win.)
-document.addEventListener('keydown', e => {
-  if (openSheet || e.defaultPrevented) return;
-  const typing = e.target.matches?.('input, textarea, select, [contenteditable="true"]');
-  if ((e.key === '/' && !typing && !e.metaKey && !e.ctrlKey) || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k')) {
-    e.preventDefault(); qEl.focus(); qEl.select(); return;
-  }
-  if (e.key === 'Escape' && view === 'settings' && !e.target.matches?.('input[type=search], input[type=text], textarea')) {
-    e.preventDefault(); return leaveSettings();             // switches and buttons in Settings don't swallow Esc
-  }
-  if (e.key !== 'Escape' || typing) return;
-  if (view === 'study' && typeof backHash === 'function' && ss) go(backHash());
-  else if (view === 'folder') go('vocab');
-});
-
-// Service worker. A new version takes over in the background (skipWaiting + clients.claim);
-// tell the user instead of reloading under them.
-const hadSW = !MEM && 'serviceWorker' in navigator && !!navigator.serviceWorker.controller;
-function onSWUpdate() {
-  if (document.getElementById('update-banner')) return;
-  const b = document.createElement('div');
-  b.id = 'update-banner'; b.className = 'update-banner'; b.setAttribute('role', 'status');
-  b.innerHTML = `<span>Qamus was updated.</span><button type="button" class="btn primary" id="ub-reload">Reload</button>
-    <button type="button" class="ub-x" aria-label="Dismiss update notice">×</button>`;
-  b.querySelector('#ub-reload').addEventListener('click', () => location.reload());
-  b.querySelector('.ub-x').addEventListener('click', () => b.remove());
-  document.body.appendChild(b);
-}
-if (!MEM && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadSW) onSWUpdate(); });
-  navigator.serviceWorker.register('sw.js').catch(() => {});
-}
-load().catch(err => { main.innerHTML = `<p>Couldn’t load the dictionary data (${esc(String(err.message || err))}).</p>`; });
-initSync();
+boot();
