@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")/.."
 rm -rf dist && mkdir dist
-cp index.html style.css app.js engine.js particles.js merge.js sync.js sw.js manifest.webmanifest icon-512.png dist/
+cp index.html style.css app.js engine.js particles.js tour.js merge.js sync.js sw.js manifest.webmanifest icon-512.png dist/
 cp -R data dist/data
 # every file sw.js caches up front must be in dist/
 node -e "

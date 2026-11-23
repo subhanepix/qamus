@@ -42,6 +42,7 @@ import {
   snippet,
   shortGloss,
 } from './engine.js';
+import { shouldTour, startTour, isTouring } from './tour.js';
 
 // ---------- Storage & Sync Setup (reuses root ../merge.js & ../sync.js) ----------
 const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -431,7 +432,7 @@ function deleteFolder(id, mode) {
 const maxT = (hist, q) => hist.reduce((m, h) => (h.q === q && h.t > m ? h.t : m), 0);
 function recordSearch(raw) {
   const q = cleanQ(raw);
-  if (!q || historyPaused()) return;
+  if (!q || historyPaused() || isTouring()) return;   // the intro's sample search isn't yours
   if (liveHistory()[0]?.q === q) return;
   Store.mutate(d => {
     const t = Math.max(Date.now(), (d.settings.historyClearedAt || 0) + 1, maxT(d.history, q) + 1);
@@ -696,7 +697,7 @@ function renderHomeView() {
     ${movedBannerHtml()}
     <section class="home-hero">
       <div class="home-eyebrow"><span lang="ar">أهلًا وسهلًا</span><span>${tod}</span></div>
-      <h1 class="home-title">${user ? `Welcome back, <em>${esc(user)}</em>.` : 'Six Arabic lexicons, <em>one quiet desk</em>.'}</h1>
+      <h1 class="home-title">${user ? `Welcome back, <em>${esc(user)}</em>.` : 'Five Arabic lexicons, <em>one quiet desk</em>.'}</h1>
       <p class="home-sub">
         Look up any inflected word, spaced root, or English term across Hans Wehr, Lane’s Lexicon, Wiktionary, al-Mufradāt, and Mukhtār al-Ṣiḥāḥ — offline-first and synced across devices.
       </p>
@@ -705,6 +706,7 @@ function renderHomeView() {
         <button type="button" class="btn" data-go="vocab">Vocabulary folders</button>
       </div>
     </section>
+    <p class="credit">inspired by Youssef Z.</p>
 
     ${studyBanner}
 
@@ -2044,6 +2046,12 @@ function renderSettingsView() {
           <button type="button" class="btn quiet sm" id="set-reset">Reset dictionary settings</button>
         </div>
       </section>
+
+      <section class="card settings-card">
+        <h3>Help</h3>
+        <p class="sub">A short walk through searching, saving and studying.</p>
+        <button type="button" class="btn" id="set-tour">Show the intro again</button>
+      </section>
     </div>
   `;
 
@@ -2081,6 +2089,7 @@ function renderSettingsView() {
     });
   });
   $('#set-parse')?.addEventListener('change', e => setResultPrefs({ parse: e.target.checked }));
+  $('#set-tour')?.addEventListener('click', () => runTour());
   $('#set-reset')?.addEventListener('click', () => {
     setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
     toast('Dictionary settings reset');
@@ -2907,6 +2916,20 @@ onEngineUpdate(stage => {
   }
 });
 
+// ---------- First-visit tour (tour.js) ----------
+const tourCtx = {
+  lsGet, lsSet,
+  oldHome: OLD_HOME,
+  used: () => !!(liveHistory().length || liveCards().length || (SYNC_URL && Sync?.state.user)),
+  sync: !!(SYNC_URL && Sync),
+  go,
+  view: () => curView,
+  intervalLabel,
+};
+function runTour() {
+  startTour(tourCtx, { onDone: ({ signIn }) => { if (signIn && !Sync?.state.user) loginSheet(); } });
+}
+
 async function boot() {
   await Store.init();
   migrateLegacyHist();
@@ -2935,6 +2958,7 @@ async function boot() {
   }
 
   route();
+  if (shouldTour(tourCtx)) runTour();
 
   initEngine().catch(err => {
     loadPill.hidden = true;

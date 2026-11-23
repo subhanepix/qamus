@@ -31,6 +31,25 @@ const TASHKEEL_RE = /[\u064B-\u0652\u0670]/;
 const EXPLICIT_HAMZA_RE = /[أإآؤئ]/;
 export const hasTashkeel = s => TASHKEEL_RE.test(String(s || ''));
 export const hasExplicitHamza = s => EXPLICIT_HAMZA_RE.test(String(s || ''));
+// Which letter carries a hamza: alif, waw or ya (bare ء counts as alif, as norm() treats it).
+const SEAT = { 'ا': 'a', 'أ': 'a', 'إ': 'a', 'آ': 'a', 'ٱ': 'a', 'ء': 'a', 'و': 'w', 'ؤ': 'w', 'ي': 'y', 'ئ': 'y', 'ى': 'y' };
+// Compares the hamzas the user typed with the headword's, where the headword appears inside the typed
+// word (ignoring hamza spelling): 'same' if one sits on the same letter (ؤ and ؤ), 'clash' if one sits on a
+// different letter (typed ؤ against ا in مامن, Hans Wehr's spelling of مأمن), else ''.
+export function hamzaFit(typed, headword) {
+  const t = String(typed || ''), h = String(headword || '').replace(DIAC, '');
+  if (!h || norm(t).length !== t.length) return '';
+  const at = norm(t).indexOf(norm(h));
+  if (at < 0) return '';
+  let same = false;
+  for (let k = 0; k < h.length; k++) {
+    const c = t[at + k];
+    if (!EXPLICIT_HAMZA_RE.test(c) || !SEAT[h[k]]) continue;
+    if (SEAT[c] !== SEAT[h[k]]) return 'clash';
+    if (c === h[k]) same = true;
+  }
+  return same ? 'same' : '';
+}
 
 const VOWEL_MAP = {
   '\u064E': 'a', '\u064B': 'a', '\u0670': 'a', // fatha, fathatan, dagger alif
@@ -661,6 +680,16 @@ export function lookupWord(q) {
   if (exactSpelling.length && exactSpelling.length < hits.size) {
     hits.clear();
     exactSpelling.forEach(id => hits.add(id));
+  } else if (!exactSpelling.length && hits.size > 1 && EXPLICIT_HAMZA_RE.test(typed)) {
+    // With prefixes or endings, drop headwords whose hamza sits on a different letter from the one typed:
+    // المؤمنين is مؤمن "believer", not مأمن "place of safety"; المأمن is مأمن, not مؤمن.
+    // Only when some headword has the hamza exactly as typed: conjugation moves hamzas (يؤمنون, from أمن).
+    const fit = [...hits].map(id => [id, hamzaFit(typed, state.byId.get(id)?.[1])]);
+    const keep = fit.filter(([, f]) => f !== 'clash').map(([id]) => id);
+    if (fit.some(([, f]) => f === 'same') && keep.length < hits.size) {
+      hits.clear();
+      keep.forEach(id => hits.add(id));
+    }
   }
 
   // Soft tashkeel-aware prioritization: never drops results on wrong tashkeel,

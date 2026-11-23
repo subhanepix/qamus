@@ -92,3 +92,14 @@ test('Soft tashkeel prioritization promotes exact matches without breaking wrong
   assert.equal(sug[0][2], 'h');
   assert.equal(eng.state.byId.get(+sug[0][3])[6], '‘ilm');
 });
+
+test('A hamza typed with a prefix or ending keeps the headword with that hamza (مؤمن, not مأمن)', () => {
+  const hits = q => [...(eng.resolveQuery(q).opt?.hits || [])].map(id => eng.state.byId.get(id)?.[6]);
+  assert.deepEqual(hits('المؤمنين'), ['mu’min']);
+  assert.deepEqual(hits('بالمؤمن'), ['mu’min']);
+  assert.ok(hits('المكتبة').includes('maktaba'));              // no hamza typed: nothing is dropped
+  assert.ok(hits('يؤمنون').length > 1);                         // the hamza moves in conjugation: nothing is dropped
+  assert.equal(eng.hamzaFit('المؤمنين', 'مامن'), 'clash');
+  assert.equal(eng.hamzaFit('المؤمنين', 'مؤمن'), 'same');
+  assert.equal(eng.hamzaFit('المأمن', 'مامن'), '');
+});

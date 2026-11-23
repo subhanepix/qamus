@@ -1,7 +1,7 @@
 // Qamus Service Worker — split shell vs. dictionary data caches so UI deploys
 // never force devices to re-download ~14 MB of static lexicon JSON.
 const PREFIX = 'qamus-';
-const SHELL_CACHE = PREFIX + 'shell-v29';
+const SHELL_CACHE = PREFIX + 'shell-v30';
 const DATA_CACHE = PREFIX + 'data-v1';
 
 const SHELL = [
@@ -11,6 +11,7 @@ const SHELL = [
   'app.js',
   'engine.js',
   'particles.js',
+  'tour.js',
   'merge.js',
   'sync.js',
   'manifest.webmanifest',
