@@ -480,6 +480,37 @@ function intervalLabel(prev, grade, now = Date.now()) {
 }
 
 // ---------- Routing ----------
+let lastHash = '', beforeSettings = null;   // the screen Settings was opened from: { hash, scroll }
+function settingsBackLabel() {
+  const p = new URLSearchParams(beforeSettings?.hash || '');
+  const q = p.get('q');
+  if (!beforeSettings) return 'Search';
+  if (q) return isAr(q) ? `<span lang="ar">${esc(q)}</span>` : esc(q);
+  if (p.has('vocab')) return 'Vocab';
+  if (p.get('folder')) return esc(folderById(p.get('folder'))?.name || 'folder');
+  if (p.get('study')) return 'study';
+  if (p.has('history')) return 'History';
+  return 'Home';
+}
+function leaveSettings() {
+  const from = beforeSettings;
+  if (!from) return go('');                       // opened from a link: nothing to go back to
+  // Results fill in a moment after they render; put the position back until it holds, unless you scroll.
+  const restore = () => {
+    const t0 = Date.now();
+    let set = null;
+    const tick = () => {
+      if (set !== null && Math.abs(window.scrollY - set) > 4) return;   // you scrolled: leave it
+      window.scrollTo(0, from.scroll);
+      set = window.scrollY;
+      if (Math.abs(set - from.scroll) > 4 && Date.now() - t0 < 2500) setTimeout(tick, 100);
+    };
+    setTimeout(tick, 50);
+  };
+  window.addEventListener('hashchange', restore, { once: true });
+  history.back();                                  // back to where you were, without a new history entry
+}
+
 function go(params) {
   const h = typeof params === 'string' ? params : new URLSearchParams(params).toString();
   if (location.hash === '#' + h || (!h && !location.hash)) route();
@@ -552,6 +583,9 @@ function route() {
   clearBtn.hidden = !qEl.value;
 
   document.body.classList.remove('studying', 'wide-view');
+  if (p.has('settings')) {   // remember where Settings was opened from, for its back button
+    if (curView !== 'settings') beforeSettings = curView === 'boot' ? null : { hash: lastHash, scroll: window.scrollY };
+  } else if (!p.has('account')) lastHash = location.hash.slice(1);
   window.scrollTo(0, 0);
 
   if (p.has('account')) {
@@ -702,7 +736,7 @@ function renderHomeView() {
         Look up any inflected word, spaced root, or English term across Hans Wehr, Lane’s Lexicon, Wiktionary, al-Mufradāt, and Mukhtār al-Ṣiḥāḥ — offline-first and synced across devices.
       </p>
       <div class="home-cta-row">
-        <button type="button" class="btn primary" id="home-focus-search">Search dictionary <kbd>/</kbd></button>
+        <button type="button" class="btn primary" id="home-focus-search">Search dictionary <kbd class="key-hint-kbd">/</kbd></button>
         <button type="button" class="btn" data-go="vocab">Vocabulary folders</button>
       </div>
     </section>
@@ -1714,7 +1748,7 @@ function renderStudyView() {
             <span class="badge-pill">${esc(folderById(cardFolder(card))?.name || '')}</span>
           </div>
           <div class="fc-front-center">${front}</div>
-          <div class="muted" style="text-align:center;font:12.5px var(--ui)">Tap card or press <kbd>Space</kbd> to reveal</div>
+          <div class="muted" style="text-align:center;font:12.5px var(--ui)">Tap card<span class="key-hint-kbd"> or press <kbd>Space</kbd></span> to reveal</div>
         </div>
         <div class="fc-face fc-back">
           <div class="fc-meta">
@@ -1952,6 +1986,7 @@ function renderSettingsView() {
   const curFont = getArFont();
 
   main.innerHTML = `
+    <button type="button" class="set-back" id="set-back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Back to ${settingsBackLabel()}</span></button>
     <div class="page-header">
       <div>
         <h1 class="page-title">Settings & Appearance</h1>
@@ -2090,6 +2125,7 @@ function renderSettingsView() {
   });
   $('#set-parse')?.addEventListener('change', e => setResultPrefs({ parse: e.target.checked }));
   $('#set-tour')?.addEventListener('click', () => runTour());
+  $('#set-back')?.addEventListener('click', leaveSettings);
   $('#set-reset')?.addEventListener('click', () => {
     setResultPrefs({ order: DICT_IDS, off: new Set(), parse: true, size: { en: 100, ar: 100 } });
     toast('Dictionary settings reset');
@@ -2746,6 +2782,7 @@ document.addEventListener('click', e => {
   const navTab = e.target.closest('[data-nav-tab]');
   if (navTab) {
     const t = navTab.dataset.navTab;
+    if (t === 'settings' && curView === 'settings') { leaveSettings(); return; }   // the gear toggles Settings
     if (t === 'search') {
       if (curView === 'home') { qEl.focus(); qEl.select(); }
       else go('');
@@ -2836,7 +2873,7 @@ document.addEventListener('keydown', e => {
 
   if (e.key === 'Escape' && !typing) {
     if (curView === 'folder') go('vocab');
-    else if (curView === 'settings') history.back();
+    else if (curView === 'settings') leaveSettings();
   }
 });
 

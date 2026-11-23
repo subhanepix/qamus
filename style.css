@@ -1588,3 +1588,19 @@ body.sheet-open { overflow: hidden; }
 
 /* Home: credit line under the welcome */
 .credit { margin: 14px 0 4px; text-align: center; font: italic 12.5px var(--en); color: var(--muted); opacity: .6; }
+
+/* Long labels in the result header wrap instead of widening the page (حرف جرّ / لام التعليل / …) */
+.rh-meta > * { max-width: 100%; }
+.rh-meta .badge-pill { white-space: normal; line-height: 1.45; }
+
+/* Settings: back to the screen it was opened from */
+.set-back { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; max-width: 100%; margin: 0 0 10px -6px; padding: 0 12px 0 6px;
+  border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); color: var(--accent); font: 600 14px var(--ui); cursor: pointer; }
+.set-back > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-back [lang=ar] { font: 19px/2 var(--ar); }
+.set-back svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.set-back:hover { background: var(--accent-soft); }
+.set-back:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Keyboard hints only where there's a keyboard */
+@media (hover: none), (pointer: coarse) { .key-hint-kbd { display: none; } }
