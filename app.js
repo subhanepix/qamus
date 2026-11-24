@@ -1737,8 +1737,12 @@ function renderStudyView() {
     const lines = (card.gloss || '').split(/\n+/).map(x => x.trim()).filter(Boolean);
     const front = study.dir === 'en'
       ? `<p class="fc-en-front">${lines.length ? lines.map(esc).join('<br>') : '(no meaning)'}</p>`
+      // Arabic → English: the sentence you saved the word from is a hint on the front, with the word marked.
+      // (Not on English → Arabic cards, where it would give the answer away.)
       : `<p class="fc-word" lang="ar">${esc(card.word)}</p>
-         ${card.highlight && card.highlight.trim() !== card.word.trim() ? `<div class="muted" style="font:22px/1.6 var(--ar)">${esc(card.highlight)}</div>` : ''}`;
+         ${card.context?.trim()
+           ? `<div class="fc-hint" lang="ar" dir="rtl">${markContextHtml(card)}</div>`
+           : card.highlight && card.highlight.trim() !== card.word.trim() ? `<div class="muted" style="font:22px/1.6 var(--ar)">${esc(card.highlight)}</div>` : ''}`;
 
     stageHtml = `<div class="fc-stage">
       <div class="fc-card${study.flipped ? ' flipped' : ''}" id="fc-card" role="button" tabindex="0">

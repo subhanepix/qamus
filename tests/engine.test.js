@@ -103,3 +103,31 @@ test('A hamza typed with a prefix or ending keeps the headword with that hamza (
   assert.equal(eng.hamzaFit('المؤمنين', 'مؤمن'), 'same');
   assert.equal(eng.hamzaFit('المأمن', 'مامن'), '');
 });
+
+// Guard: the hit order already puts the verbal root entry first; keep it that way.
+test('A verbal reading leads with the Form I root entry, not a noun with the same letters', () => {
+  const lead = q => {
+    const res = eng.resolveQuery(q);
+    return eng.state.byId.get([...res.opt.hits][0])?.[6];
+  };
+  assert.equal(lead('يقرأ'), 'qara’a');        // "he reads", not qur’ "menses"
+  assert.equal(lead('يقرأُ'), 'qara’a');
+  assert.equal(lead('يعرفها'), '‘arafa');      // "he knows it", not ‘arf "fragrance"
+  assert.equal(lead('كتاب'), 'kitāb');          // a direct spelling still comes first
+  // Reordering never changes which roots a word resolves to
+  const roots = q => eng.resolveQuery(q).roots.map(id => eng.norm(eng.state.byId.get(id)[1]));
+  assert.ok(roots('يقرأ').includes('قرا'));
+});
+
+test('و or ف glued to a particle reads as that particle (فلمّا is فَ + لَمَّا, not فلم "film")', () => {
+  const ps = q => (eng.resolveQuery(q).opt?.particles || []).map(p => [p.ar, p._prefix]);
+  assert.deepEqual(ps('فلمّا')[0], ['لَمَّا', 'ف']);
+  assert.deepEqual(ps('فلما')[0], ['لَمَّا', 'ف']);
+  assert.ok(ps('ولكن').some(([ar, pre]) => eng.norm(ar) === 'لكن' && pre === 'و'));
+  assert.ok(ps('وإن').some(([, pre]) => pre === 'و'));
+  // Words that only look like و/ف + something keep their normal reading
+  assert.deepEqual(ps('فيه'), []);
+  assert.deepEqual(ps('وجد'), []);
+  // A particle found directly carries no prefix
+  assert.equal(ps('في')[0]?.[1], undefined);
+});

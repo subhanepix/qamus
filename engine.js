@@ -646,9 +646,18 @@ export function retryForms(q) {
   return out;
 }
 
+// و or ف glued to a curated particle (فلمّا, ولكن, فإن): offer the particle, marked with `_prefix`.
+// Only when the word isn't a particle itself; roots and hits are untouched, so §8 lookups don't change.
+function prefixedParticles(q) {
+  const m = String(q || '').trim().match(/^([وف])[ً-ْ]*(.+)$/);
+  if (!m || norm(m[2]).length < 2) return [];
+  return lookupParticles(m[2]).map(p => ({ ...p, _prefix: m[1] }));
+}
+
 export function lookupWord(q) {
   const n = norm(q);
-  const particles = lookupParticles(q);
+  const direct = lookupParticles(q);
+  const particles = direct.length ? direct : prefixedParticles(q);
   const hits = new Set(), forms = [], roots = [];
   const addRoot = id => { if (id != null && !roots.includes(id)) roots.push(id); };
   for (const e of state.hwNorm.get(n) || []) { if (e[3]) addRoot(e[0]); }

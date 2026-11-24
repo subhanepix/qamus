@@ -56,3 +56,39 @@ test('Save word -> Vocab folder & mastery bar -> Study Review + Undo + Browse', 
   await page.getByRole('button', { name: 'Browse all cards' }).click();
   await expect(page.locator('#st-got')).toBeVisible();
 });
+
+test('A card saved with its sentence shows the sentence as a hint on the front (AR → EN only)', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => document.documentElement.dataset.engineStage === 'full');
+
+  // Make the Inbox by bookmarking a word, then add a card with a context sentence
+  await page.evaluate(() => { location.hash = new URLSearchParams({ q: 'عِلْم' }).toString(); });
+  const bm = page.locator('section[data-sec="hw"] .entry-row').first().locator('.bm-btn');
+  await bm.click();
+  await page.locator('.sheet .pick-folder-btn', { hasText: 'Inbox' }).click();
+  await page.evaluate(() => { location.hash = 'vocab'; });
+  await page.locator('.folder-card', { hasText: 'Inbox' }).locator('.fc-open').click();
+  await page.locator('#vf-add-card').click();
+  await page.locator('#cs-word').fill('مِفْتَاح');
+  await page.locator('#cs-gloss').fill('key');
+  await page.locator('#cs-context').fill('إنّ معرفةَ الكلماتِ مفتاحُ الفهمِ');
+  await page.locator('#cs-form button[type="submit"]').click();
+  await expect(page.locator('.vcard-row')).toHaveCount(2);
+
+  // Browse until the مفتاح card is up
+  await page.getByRole('button', { name: /Browse/ }).click();
+  const word = page.locator('.fc-front .fc-word');
+  for (let i = 0; i < 2 && !(await word.textContent()).includes('مِفْتَاح'); i++) await page.locator('#st-next').click();
+  await expect(word).toHaveText('مِفْتَاح');
+
+  // Front: the sentence, with the word (as written, vowels and all) marked
+  const hint = page.locator('.fc-front .fc-hint');
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText('معرفةَ الكلماتِ');
+  await expect(hint.locator('mark')).toHaveText('مفتاحُ');
+
+  // EN → AR: the sentence would give the answer away, so it stays off the front
+  await page.locator('#st-dir').click();
+  await expect(page.locator('.fc-front .fc-en-front')).toBeVisible();
+  await expect(page.locator('.fc-front .fc-hint')).toHaveCount(0);
+});
